@@ -20,7 +20,10 @@ import {
   AlignCenter,
   ArrowDownToLine,
   RefreshCcw,
-  Ruler
+  Ruler,
+  Copy,
+  Clipboard,
+  Trash2
 } from 'lucide-react';
 
 const HeaderButton: React.FC<{ 
@@ -80,6 +83,7 @@ const PropertyInput: React.FC<{
 
 const MenuBar = () => {
   const store = useAppStore();
+  const gridVisible = store.viewportGridStates[store.activeViewportId];
   
   return (
     <div className="h-10 bg-gradient-to-b from-gray-750 to-gray-800 border-b border-gray-950 flex items-center px-4 gap-4 select-none">
@@ -113,7 +117,7 @@ const MenuBar = () => {
       </div>
 
       <div className="flex items-center gap-1 pr-4 border-r border-gray-600">
-        <HeaderButton active={store.gridVisible} onClick={store.toggleGrid} title="Toggle Grid (G)">
+        <HeaderButton active={gridVisible} onClick={store.toggleGrid} title="Toggle Grid (G)">
           <Grid3X3 size={14} />
         </HeaderButton>
       </div>
@@ -148,6 +152,16 @@ const MenuBar = () => {
       )}
 
       <div className="flex items-center gap-1 ml-auto">
+        <HeaderButton onClick={store.copy} title="Copy (Ctrl+C)" active={false}>
+          <Copy size={14} />
+        </HeaderButton>
+        <HeaderButton onClick={() => store.setRequestPaste(true)} title="Paste (Ctrl+V)" active={false}>
+          <Clipboard size={14} />
+        </HeaderButton>
+        <HeaderButton onClick={store.deleteSelected} title="Delete (Del)" active={false}>
+          <Trash2 size={14} />
+        </HeaderButton>
+        <div className="w-px h-3 bg-gray-600 mx-1"></div>
         <HeaderButton onClick={store.undo} title="Undo (Ctrl+Z)" active={false}>
           <Undo size={14} />
         </HeaderButton>
@@ -453,14 +467,25 @@ export default function App() {
       // Don't trigger shortcuts when typing in inputs
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
 
-      if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+      const key = e.key.toLowerCase();
+      const isCtrl = e.ctrlKey || e.metaKey; // Support Cmd on Mac
+
+      if (isCtrl && key === 'z') {
         e.preventDefault();
         store.undo();
-      } else if (e.ctrlKey && e.key.toLowerCase() === 'y') {
+      } else if (isCtrl && key === 'y') {
         e.preventDefault();
         store.redo();
+      } else if (isCtrl && key === 'c') {
+        e.preventDefault();
+        store.copy();
+      } else if (isCtrl && key === 'v') {
+        e.preventDefault();
+        store.setRequestPaste(true); // Trigger paste request instead of direct paste
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        store.deleteSelected();
       } else {
-        const key = e.key.toLowerCase();
         switch(key) {
           case 'g': store.toggleGrid(); break;
           case 'w': store.setTransformMode('translate'); break;
@@ -547,6 +572,9 @@ export default function App() {
         <div className="w-px h-3 bg-gray-700 mx-2"></div>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">+</kbd><kbd className="bg-gray-700 px-1 rounded text-gray-300">-</kbd> Gizmo Size</span>
         <div className="flex-1"></div>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+C</kbd> Copy</span>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+V</kbd> Paste</span>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Del</kbd> Delete</span>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+Z</kbd> Undo</span>
       </div>
     </div>

@@ -23,6 +23,8 @@ const INITIAL_OBJECTS: SceneObject[] = [
 export const useAppStore = create<AppState>((set, get) => ({
   objects: JSON.parse(JSON.stringify(INITIAL_OBJECTS)),
   selectedId: 'cube-1',
+  clipboard: null,
+  pasteRequest: false,
   viewportLayout: 4,
   activeViewportId: 0,
   // Default configuration for up to 4 viewports
@@ -32,9 +34,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     2: 'front',
     3: 'side'
   },
+  // Default grid state for viewports
+  viewportGridStates: {
+    0: true,
+    1: true,
+    2: true,
+    3: true
+  },
   transformMode: 'translate',
   transformSpace: 'local',
-  gridVisible: true,
   isGizmoEditMode: false,
   gizmoSize: 0.5, // Smaller default because object is 0.1
   pivotCommand: null,
@@ -54,7 +62,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   
   setTransformSpace: (space) => set({ transformSpace: space }),
   
-  toggleGrid: () => set((state) => ({ gridVisible: !state.gridVisible })),
+  toggleGrid: () => set((state) => ({ 
+    viewportGridStates: {
+        ...state.viewportGridStates,
+        [state.activeViewportId]: !state.viewportGridStates[state.activeViewportId]
+    }
+  })),
   
   toggleGizmoEditMode: () => set((state) => ({ isGizmoEditMode: !state.isGizmoEditMode })),
 
@@ -67,6 +80,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   setUnit: (unit) => set({ unit }),
   
   selectObject: (id) => set({ selectedId: id }),
+  
+  deleteSelected: () => {
+    const { selectedId, objects, history, historyIndex } = get();
+    if (!selectedId) return;
+
+    const newObjects = objects.filter(o => o.id !== selectedId);
+
+    // Add to history
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(JSON.parse(JSON.stringify(newObjects)));
+    
+    set({
+        objects: newObjects,
+        selectedId: null,
+        history: newHistory,
+        historyIndex: newHistory.length - 1
+    });
+  },
   
   updateObject: (id, changes, recordHistory = true) => {
     const { objects, history, historyIndex } = get();
@@ -108,6 +139,83 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  copy: () => {
+    const { selectedId, objects } = get();
+    if (!selectedId) return;
+    
+    const objToCopy = objects.find(o => o.id === selectedId);
+    if (objToCopy) {
+        set({ clipboard: JSON.parse(JSON.stringify(objToCopy)) });
+    }
+  },
+
+  setRequestPaste: (active) => set({ pasteRequest: active }),
+
+  paste: (position) => {
+    const { clipboard, objects, history, historyIndex } = get();
+    if (!clipboard) return;
+
+    // Deep clone clipboard to create new instance
+    const newObj = JSON.parse(JSON.stringify(clipboard));
+    
+    // Generate new ID
+    const randomId = Math.random().toString(36).substr(2, 9);
+    newObj.id = `${newObj.geometry || 'obj'}-${randomId}`;
+
+    // --- SMART NAMING LOGIC (Cube -> Cube_01 -> Cube_02) ---
+    // 1. Identify Base Name (e.g., "Cube_05" -> "Cube")
+    const nameMatch = newObj.name.match(/^(.*)_(\d+)$/);
+    let baseName = newObj.name;
+    if (nameMatch) {
+        baseName = nameMatch[1];
+    }
+
+    // 2. Find max suffix for this base name
+    let maxSuffix = 0;
+    // If the base name itself exists (e.g. "Cube"), we start counting from 1
+    const baseExists = objects.some(o => o.name === baseName);
+    
+    const regex = new RegExp(`^${baseName}_(\\d+)$`);
+    
+    objects.forEach(obj => {
+        const match = obj.name.match(regex);
+        if (match) {
+            const num = parseInt(match[1]);
+            if (num > maxSuffix) maxSuffix = num;
+        }
+    });
+
+    // If we only have "Cube", maxSuffix is 0, so next is 01.
+    // If we have "Cube_02", maxSuffix is 2, next is 03.
+    const nextSuffix = maxSuffix + 1;
+    newObj.name = `${baseName}_${nextSuffix.toString().padStart(2, '0')}`;
+    
+    // --- POSITIONING ---
+    if (position) {
+        newObj.position.x = position.x;
+        newObj.position.y = position.y;
+        newObj.position.z = position.z;
+    } else {
+        // Fallback: Offset position slightly to make duplication visible
+        newObj.position.x += 0.1;
+        newObj.position.z += 0.1;
+    }
+
+    const newObjects = [...objects, newObj];
+
+    // Add to history
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(JSON.parse(JSON.stringify(newObjects)));
+    
+    set({
+        objects: newObjects,
+        selectedId: newObj.id, // Select the new object
+        history: newHistory,
+        historyIndex: newHistory.length - 1,
+        pasteRequest: false // Reset request flag
+    });
+  },
+
   recordHistory: () => {
     const { objects, history, historyIndex } = get();
     const newHistory = history.slice(0, historyIndex + 1);
@@ -115,7 +223,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const currentSnapshot = JSON.stringify(objects);
     const lastSnapshot = JSON.stringify(history[historyIndex]);
     
-    if (currentSnapshot !== lastSnapshot) {
+    if (currentSnapshot !== lastSnapshot) { 
         newHistory.push(JSON.parse(currentSnapshot));
         set({ 
             history: newHistory,

@@ -17,25 +17,30 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
     selectedId, 
     transformMode, 
     transformSpace, 
-    gridVisible, 
+    viewportGridStates, 
     activeViewportId, 
     isGizmoEditMode,
     gizmoSize,
     pivotCommand,
     unit,
+    pasteRequest, // State to check if paste is requested
     updateObject,
     selectObject,
     setPivotCommand,
-    recordHistory
+    recordHistory,
+    paste,
+    setRequestPaste
   } = useAppStore();
 
-  const { scene } = useThree();
+  const { scene, raycaster, pointer, camera } = useThree();
   const selectedObject = objects.find(o => o.id === selectedId);
   const transformRef = useRef<any>(null);
   const [transformTarget, setTransformTarget] = useState<THREE.Object3D | undefined>(undefined);
   
   // Ref to store the initial WORLD state of the geometry before a drag starts
   const geometryWorldState = useRef<{ pos: THREE.Vector3, quat: THREE.Quaternion } | null>(null);
+
+  const isGridVisible = viewportGridStates[viewportId];
 
   // Update transform target when selection changes or objects update
   useEffect(() => {
@@ -47,6 +52,42 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
       setTransformTarget(undefined);
     }
   }, [selectedId, scene, objects]);
+
+  // Handle Paste Request (Ctrl+V at Cursor)
+  useEffect(() => {
+    if (pasteRequest && activeViewportId === viewportId) {
+        // Calculate Intersection with the Grid Plane
+        raycaster.setFromCamera(pointer, camera);
+        
+        // Define plane based on view type (Grid orientation)
+        const planeNormal = new THREE.Vector3();
+        const planeConstant = 0; // Grid is at origin
+        
+        if (type === 'front') {
+            // XY Plane
+            planeNormal.set(0, 0, 1);
+        } else if (type === 'side' || type === 'left') {
+            // YZ Plane
+            planeNormal.set(1, 0, 0);
+        } else {
+            // XZ Plane (Top, Perspective)
+            planeNormal.set(0, 1, 0);
+        }
+
+        const plane = new THREE.Plane(planeNormal, planeConstant);
+        const target = new THREE.Vector3();
+        
+        const intersection = raycaster.ray.intersectPlane(plane, target);
+        
+        if (intersection) {
+            // Pass the calculated 3D position to the paste action
+            paste({ x: target.x, y: target.y, z: target.z });
+        } else {
+            // Fallback if no intersection (e.g. looking away from grid)
+            paste(); 
+        }
+    }
+  }, [pasteRequest, activeViewportId, viewportId, type, raycaster, pointer, camera, paste]);
 
   // Handle Pivot Commands (Center, Bottom, Reset)
   useEffect(() => {
@@ -230,20 +271,44 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
 
   const gridConfig = getGridConfig();
 
+  // Determine grid orientation based on view type
+  const getGridTransform = (viewType: ViewportType) => {
+    switch (viewType) {
+        case 'front':
+            // XY Plane (Rotate X 90)
+            return { rotation: [Math.PI / 2, 0, 0] as [number, number, number], position: [0, 0, -0.001] as [number, number, number] };
+        case 'side':
+            // YZ Plane (Rotate Z -90) - Faces +X (Right View)
+            return { rotation: [0, 0, -Math.PI / 2] as [number, number, number], position: [-0.001, 0, 0] as [number, number, number] };
+        case 'left':
+            // YZ Plane (Rotate Z 90) - Faces -X (Left View)
+            return { rotation: [0, 0, Math.PI / 2] as [number, number, number], position: [0.001, 0, 0] as [number, number, number] };
+        case 'top':
+        case 'perspective':
+        default:
+            // XZ Plane (Default)
+            return { rotation: [0, 0, 0] as [number, number, number], position: [0, -0.001, 0] as [number, number, number] };
+    }
+  };
+
+  const gridTransform = getGridTransform(type);
+
   return (
     <>
       <ambientLight intensity={0.5} />
       <directionalLight position={[10, 10, 10]} intensity={1} />
       
-      {gridVisible && (
+      {isGridVisible && (
         <Grid 
           infiniteGrid 
           fadeDistance={50} 
-          sectionColor="#4a4a4a" 
-          cellColor="#555555" // Lightened cell color for better visibility of the "measure"
-          position={[0, -0.001, 0]}
+          sectionColor="#808080" // Bright White for major sections
+          cellColor="#888888"    // Lighter Gray for the unit lines so they are clearly visible
+          position={gridTransform.position}
+          rotation={gridTransform.rotation}
           cellSize={gridConfig.cell}
           sectionSize={gridConfig.section}
+          raycast={() => null} // Disable raycasting so the grid doesn't block clicks
         />
       )}
 
@@ -253,14 +318,17 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
             name={obj.id} // The Group is the "Selectable" entity (Pivot)
             position={[obj.position.x, obj.position.y, obj.position.z]}
             rotation={[obj.rotation.x, obj.rotation.y, obj.rotation.z]}
-            scale={[obj.scale.x, obj.scale.y, obj.scale.z]}
+            scale={[obj.scale.x, obj.scale.y, obj.scale.z]} // Scale applies to the group
             visible={obj.visible}
             onClick={(e) => {
                 e.stopPropagation();
                 selectObject(obj.id);
             }}
+            onPointerOver={() => document.body.style.cursor = 'pointer'}
+            onPointerOut={() => document.body.style.cursor = 'auto'}
         >
             {/* The Mesh is the visual geometry, offset from the pivot */}
+            {/* BoxGeometry uses Dimensions for its size */}
             <mesh
                 position={[obj.geometryOffset.x, obj.geometryOffset.y, obj.geometryOffset.z]}
                 rotation={[
@@ -279,7 +347,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
             
             {/* Visual Pivot Helper (Tiny Axis) */}
             {selectedId === obj.id && (
-                <axesHelper args={[gizmoSize * 1.5]} />
+                <axesHelper args={[gizmoSize * 1.5]} raycast={() => null} />
             )}
         </group>
       ))}
@@ -300,11 +368,10 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
 };
 
 export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
-  const { activeViewportId, setActiveViewport } = useAppStore();
+  const { activeViewportId, setActiveViewport, selectObject } = useAppStore();
   const isActive = activeViewportId === id;
 
   const getCameraProps = () => {
-    // Adjusted zoom for smaller default objects (10cm = 0.1)
     switch (type) {
       case 'top': return { position: [0, 0.5, 0] as [number, number, number], up: [0, 0, -1] as [number, number, number], zoom: 500 };
       case 'front': return { position: [0, 0, 0.5] as [number, number, number], zoom: 500 };
@@ -326,7 +393,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
         {label}
       </div>
       
-      <Canvas className="w-full h-full bg-[#1a1a1a]">
+      <Canvas 
+        className="w-full h-full bg-[#1a1a1a]"
+        onPointerMissed={() => selectObject(null)} // Click background to deselect
+      >
         {isOrtho ? (
           <OrthographicCamera makeDefault position={camProps.position} up={camProps.up} zoom={camProps.zoom} />
         ) : (
@@ -335,7 +405,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
         
         <OrbitControls 
           makeDefault 
-          enableRotate={!isOrtho} // Disable rotation for ortho views to keep them aligned
+          enableRotate={!isOrtho}
           enableDamping 
           dampingFactor={0.1}
         />

@@ -27,12 +27,14 @@ export interface SceneObject {
 export interface AppState {
   objects: SceneObject[];
   selectedId: string | null;
+  clipboard: SceneObject | null; // Stores the copied object
+  pasteRequest: boolean; // Signal to viewports to handle paste at cursor
   viewportLayout: 1 | 2 | 4;
   activeViewportId: number;
   viewportConfigs: Record<number, ViewportType>; // Configuration for each viewport ID
+  viewportGridStates: Record<number, boolean>; // Grid visibility for each viewport ID
   transformMode: TransformMode;
   transformSpace: TransformSpace;
-  gridVisible: boolean;
   isGizmoEditMode: boolean; // "D" key toggle
   gizmoSize: number; // Size of the transform gizmo
   pivotCommand: PivotCommand; // Command to manipulate pivot
@@ -52,9 +54,13 @@ export interface AppState {
   setPivotCommand: (command: PivotCommand) => void;
   setUnit: (unit: UnitType) => void;
   selectObject: (id: string | null) => void;
+  deleteSelected: () => void;
   updateObject: (id: string, changes: Partial<SceneObject>, recordHistory?: boolean) => void;
   toggleVisibility: (id: string) => void;
   undo: () => void;
   redo: () => void;
   recordHistory: () => void;
+  copy: () => void;
+  paste: (position?: Vector3Data) => void; // Updated to accept optional position
+  setRequestPaste: (active: boolean) => void; // Trigger paste flow
 }
