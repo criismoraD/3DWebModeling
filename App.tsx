@@ -1,8 +1,8 @@
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { Viewport3D } from './components/Viewport3D';
-import { ViewportType, UnitType } from './types';
+import { ViewportType, UnitType, SceneObject } from './types';
 import { 
   Box, 
   Eye, 
@@ -27,7 +27,13 @@ import {
   Square,
   Circle,
   Component,
-  Layers
+  Layers,
+  Disc,
+  CircleDashed,
+  Target,
+  Hash,
+  Magnet,
+  Triangle
 } from 'lucide-react';
 
 const HeaderButton: React.FC<{ 
@@ -78,6 +84,181 @@ const PropertyInput: React.FC<{
   );
 };
 
+// New Coordinate Input Component
+const CoordinateInputBar: React.FC = () => {
+    const { selectedIds, objects, updateMultipleObjects, transformMode, unit } = useAppStore();
+    const [isRelative, setIsRelative] = useState(false);
+    
+    // Local state for inputs to allow typing before commit
+    const [inputs, setInputs] = useState({ x: '0', y: '0', z: '0' });
+
+    // When selection changes or mode changes, update inputs (Absolute only)
+    useEffect(() => {
+        if (!isRelative && selectedIds.length > 0) {
+             const primary = objects.find(o => o.id === selectedIds[selectedIds.length - 1]);
+             if (primary) {
+                 const factor = getUnitFactor(unit);
+                 let val = { x: 0, y: 0, z: 0 };
+                 if (transformMode === 'translate') val = primary.position;
+                 else if (transformMode === 'rotate') val = { x: toDeg(primary.rotation.x), y: toDeg(primary.rotation.y), z: toDeg(primary.rotation.z) };
+                 else if (transformMode === 'scale') val = primary.scale;
+
+                 // For Rotation/Scale, we handle differently, but let's assume standard behavior
+                 setInputs({
+                     x: (val.x * (transformMode === 'translate' ? factor : 1)).toFixed(3),
+                     y: (val.y * (transformMode === 'translate' ? factor : 1)).toFixed(3),
+                     z: (val.z * (transformMode === 'translate' ? factor : 1)).toFixed(3)
+                 });
+             }
+        } else if (isRelative) {
+            setInputs({ x: '0', y: '0', z: '0' });
+        }
+    }, [selectedIds, objects, transformMode, unit, isRelative]);
+
+    const getUnitFactor = (u: UnitType) => {
+        switch(u) { case 'mm': return 1000; case 'cm': return 100; case 'in': return 39.3701; default: return 1; }
+    };
+    const toDeg = (rad: number) => rad * (180 / Math.PI);
+    const toRad = (deg: number) => deg * (Math.PI / 180);
+
+    const handleCommit = (axis: 'x' | 'y' | 'z', value: string) => {
+        const numVal = parseFloat(value);
+        if (isNaN(numVal)) return;
+
+        const factor = getUnitFactor(unit);
+        const updates: {id: string, changes: Partial<SceneObject>}[] = [];
+
+        objects.forEach(obj => {
+            if (!selectedIds.includes(obj.id)) return;
+            
+            const changes: Partial<SceneObject> = {};
+            
+            // RELATIVE (Offset)
+            if (isRelative) {
+                if (transformMode === 'translate') {
+                     const delta = numVal / factor;
+                     changes.position = { ...obj.position, [axis]: obj.position[axis] + delta };
+                } else if (transformMode === 'rotate') {
+                     const deltaRad = toRad(numVal);
+                     changes.rotation = { ...obj.rotation, [axis]: obj.rotation[axis] + deltaRad };
+                } else if (transformMode === 'scale') {
+                    changes.scale = { ...obj.scale, [axis]: obj.scale[axis] + numVal };
+                }
+            } 
+            // ABSOLUTE
+            else {
+                if (transformMode === 'translate') {
+                    changes.position = { ...obj.position, [axis]: numVal / factor };
+                } else if (transformMode === 'rotate') {
+                    changes.rotation = { ...obj.rotation, [axis]: toRad(numVal) };
+                } else if (transformMode === 'scale') {
+                    changes.scale = { ...obj.scale, [axis]: numVal };
+                }
+            }
+            updates.push({ id: obj.id, changes });
+        });
+
+        if (updates.length > 0) {
+            updateMultipleObjects(updates, true);
+            if (isRelative) setInputs(prev => ({ ...prev, [axis]: '0' })); // Reset relative input
+        }
+    };
+
+    if (selectedIds.length === 0) return null;
+
+    return (
+        <div className="flex items-center gap-4 bg-gray-850 border border-gray-700 rounded px-2 py-1 h-full shadow-inner">
+            <button 
+               onClick={() => setIsRelative(!isRelative)}
+               className={`p-1 rounded flex items-center justify-center w-6 h-6 transition-colors ${isRelative ? 'bg-accent-500 text-white' : 'bg-gray-700 text-gray-400 hover:text-white'}`}
+               title={isRelative ? "Relative Mode (Offset)" : "Absolute Mode"}
+            >
+                {isRelative ? <Move size={12} className="rotate-45" /> : <Hash size={12} />}
+            </button>
+            
+            <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 font-bold w-4 text-center">X:</span>
+                <input 
+                    type="text" 
+                    value={inputs.x} 
+                    onChange={e => setInputs({...inputs, x: e.target.value})} 
+                    onKeyDown={e => { if(e.key === 'Enter') handleCommit('x', inputs.x); }}
+                    onBlur={() => handleCommit('x', inputs.x)}
+                    className="w-16 bg-gray-900 border border-gray-600 hover:border-gray-500 focus:border-accent-500 rounded text-xs px-1 text-gray-200 focus:outline-none transition-colors"
+                />
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 font-bold w-4 text-center">Y:</span>
+                <input 
+                    type="text" 
+                    value={inputs.y} 
+                    onChange={e => setInputs({...inputs, y: e.target.value})} 
+                    onKeyDown={e => { if(e.key === 'Enter') handleCommit('y', inputs.y); }}
+                    onBlur={() => handleCommit('y', inputs.y)}
+                    className="w-16 bg-gray-900 border border-gray-600 hover:border-gray-500 focus:border-accent-500 rounded text-xs px-1 text-gray-200 focus:outline-none transition-colors"
+                />
+            </div>
+            <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-400 font-bold w-4 text-center">Z:</span>
+                <input 
+                    type="text" 
+                    value={inputs.z} 
+                    onChange={e => setInputs({...inputs, z: e.target.value})} 
+                    onKeyDown={e => { if(e.key === 'Enter') handleCommit('z', inputs.z); }}
+                    onBlur={() => handleCommit('z', inputs.z)}
+                    className="w-16 bg-gray-900 border border-gray-600 hover:border-gray-500 focus:border-accent-500 rounded text-xs px-1 text-gray-200 focus:outline-none transition-colors"
+                />
+            </div>
+            
+            <div className="h-4 w-px bg-gray-700 mx-2"></div>
+            
+            <span className="text-[10px] text-gray-500 font-medium">
+                Grid = {unit === 'mm' ? '1mm' : unit === 'cm' ? '1cm' : '1m'}
+            </span>
+        </div>
+    );
+};
+
+// Snap Toolbar Dropdown
+const SnapDropdown: React.FC = () => {
+    const { snapSettings, setSnapMode } = useAppStore();
+    const [isOpen, setIsOpen] = useState(false);
+
+    return (
+        <div className="relative">
+             <button 
+                onClick={() => setIsOpen(!isOpen)}
+                className="h-full px-1 hover:bg-gray-700 rounded-r border-l border-gray-700 flex items-center"
+             >
+                <div className="w-0 h-0 border-l-[3px] border-l-transparent border-r-[3px] border-r-transparent border-t-[4px] border-t-gray-400"></div>
+             </button>
+             {isOpen && (
+                 <>
+                    <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+                    <div className="absolute top-full left-0 mt-1 bg-gray-850 border border-gray-700 shadow-xl rounded w-32 z-50 py-1 flex flex-col">
+                        <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-xs">
+                            <input 
+                                type="checkbox" 
+                                checked={snapSettings.grid} 
+                                onChange={(e) => setSnapMode('grid', e.target.checked)}
+                            />
+                            <Grid3X3 size={12} /> Grid Points
+                        </label>
+                        <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-xs">
+                            <input 
+                                type="checkbox" 
+                                checked={snapSettings.vertex} 
+                                onChange={(e) => setSnapMode('vertex', e.target.checked)}
+                            />
+                            <Triangle size={12} /> Vertex
+                        </label>
+                    </div>
+                 </>
+             )}
+        </div>
+    );
+};
+
 const MenuBar = () => {
   const store = useAppStore();
   const gridVisible = store.viewportGridStates[store.activeViewportId];
@@ -115,6 +296,17 @@ const MenuBar = () => {
         <HeaderButton active={gridVisible} onClick={store.toggleGrid} title="Toggle Grid (G)">
           <Grid3X3 size={14} />
         </HeaderButton>
+        {/* Snap Controls */}
+        <div className="flex items-center ml-2 bg-gray-850 border border-gray-700 rounded h-[26px]">
+            <button 
+                onClick={store.toggleSnapEnabled} 
+                title="Toggle Snaps (S)"
+                className={`px-2 h-full rounded-l flex items-center gap-1 text-xs transition-colors ${store.snapSettings.enabled ? 'bg-accent-500 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+                <Magnet size={14} className={store.snapSettings.enabled ? "fill-current" : ""} />
+            </button>
+            <SnapDropdown />
+        </div>
       </div>
       
       {/* Creation Tools */}
@@ -154,6 +346,24 @@ const MenuBar = () => {
           <option value="local">Local</option>
           <option value="world">World</option>
         </select>
+        
+        {/* Pivot Mode Toggle */}
+        <div className="flex items-center gap-1 bg-gray-850 border border-gray-700 rounded p-0.5">
+            <button 
+                onClick={() => store.setPivotMode('selection')} 
+                title="Use Selection Center (Group Transform)"
+                className={`p-1 rounded ${store.pivotMode === 'selection' ? 'bg-accent-500 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+                <Target size={12} />
+            </button>
+            <button 
+                onClick={() => store.setPivotMode('individual')} 
+                title="Use Individual Pivot Points"
+                className={`p-1 rounded ${store.pivotMode === 'individual' ? 'bg-accent-500 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+                <CircleDashed size={12} />
+            </button>
+        </div>
       </div>
       
       {store.isGizmoEditMode && (
@@ -448,6 +658,8 @@ export default function App() {
           case 'f': store.setViewportType(store.activeViewportId, 'front'); break;
           case 'l': store.setViewportType(store.activeViewportId, 'left'); break;
           case 'p': store.setViewportType(store.activeViewportId, 'perspective'); break;
+          // Snap
+          case 's': store.toggleSnapEnabled(); break;
           // Gizmo Size
           case '+': 
           case '=':
@@ -506,16 +718,18 @@ export default function App() {
       </div>
 
       {/* Status Bar */}
-      <div className="h-6 bg-gray-850 border-t border-gray-950 flex items-center px-4 gap-4 text-[10px] text-gray-500">
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">LMB</kbd> Select</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">RMB</kbd> Orbit</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">MMB</kbd> Pan</span>
-        <div className="w-px h-3 bg-gray-700 mx-2"></div>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">W</kbd> Move</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">E</kbd> Rotate</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">R</kbd> Scale</span>
-        <div className="w-px h-3 bg-gray-700 mx-2"></div>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+C/V</kbd> Copy/Paste</span>
+      <div className="h-8 bg-gray-850 border-t border-gray-950 flex items-center px-4 gap-4 text-[10px] text-gray-500 justify-between">
+        <div className="flex items-center gap-4">
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">LMB</kbd> Select</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">RMB</kbd> Orbit</span>
+            <div className="w-px h-3 bg-gray-700 mx-1"></div>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">W/E/R</kbd> Transform</span>
+        </div>
+        
+        {/* Coordinate Input Bar */}
+        <div className="flex-1 flex justify-center h-full py-0.5">
+            <CoordinateInputBar />
+        </div>
       </div>
     </div>
   );

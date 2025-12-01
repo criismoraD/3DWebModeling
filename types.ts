@@ -3,6 +3,7 @@ export type ViewportType = 'perspective' | 'top' | 'front' | 'side' | 'left';
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type TransformSpace = 'local' | 'world';
 export type PivotCommand = 'center' | 'bottom' | 'reset' | null;
+export type PivotMode = 'selection' | 'individual'; // New: Group vs Individual transform
 export type UnitType = 'mm' | 'cm' | 'm' | 'in';
 export type InteractionMode = 'select' | 'create_cube' | 'create_sphere' | 'create_plane';
 export type DrawingPhase = 'idle' | 'drawing_base' | 'drawing_height';
@@ -11,6 +12,13 @@ export interface Vector3Data {
   x: number;
   y: number;
   z: number;
+}
+
+export interface SnapSettings {
+  enabled: boolean;
+  grid: boolean;
+  vertex: boolean;
+  threshold: number;
 }
 
 export interface SceneObject {
@@ -40,8 +48,11 @@ export interface AppState {
   transformMode: TransformMode;
   transformSpace: TransformSpace;
   isGizmoEditMode: boolean; // "D" key toggle
+  isTransforming: boolean; // New: Track if user is currently dragging gizmo
   gizmoSize: number; // Size of the transform gizmo
   pivotCommand: PivotCommand; // Command to manipulate pivot
+  pivotMode: PivotMode; // New state
+  snapSettings: SnapSettings; // New: Snapping configuration
   unit: UnitType; // Current display unit
   history: SceneObject[][]; // Simple undo stack (snapshots of objects array)
   historyIndex: number;
@@ -59,8 +70,12 @@ export interface AppState {
   setTransformSpace: (space: TransformSpace) => void;
   toggleGrid: () => void;
   toggleGizmoEditMode: () => void;
+  setIsTransforming: (isTransforming: boolean) => void; // New action
   updateGizmoSize: (delta: number) => void;
   setPivotCommand: (command: PivotCommand) => void;
+  setPivotMode: (mode: PivotMode) => void; // New action
+  toggleSnapEnabled: () => void;
+  setSnapMode: (mode: 'grid' | 'vertex', active: boolean) => void;
   setUnit: (unit: UnitType) => void;
   
   // Selection Actions

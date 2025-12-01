@@ -43,8 +43,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   transformMode: 'translate',
   transformSpace: 'local',
   isGizmoEditMode: false,
-  gizmoSize: 0.5,
+  isTransforming: false,
+  gizmoSize: 1.0, // Increased default size
   pivotCommand: null,
+  pivotMode: 'selection', // Default to Group/Selection Center
+  snapSettings: {
+      enabled: false,
+      grid: true,
+      vertex: false,
+      threshold: 0.2 // Default world unit threshold
+  },
   unit: 'cm', 
   history: [JSON.parse(JSON.stringify(INITIAL_OBJECTS))],
   historyIndex: 0,
@@ -74,11 +82,23 @@ export const useAppStore = create<AppState>((set, get) => ({
   
   toggleGizmoEditMode: () => set((state) => ({ isGizmoEditMode: !state.isGizmoEditMode })),
 
+  setIsTransforming: (isTransforming) => set({ isTransforming }),
+
   updateGizmoSize: (delta) => set((state) => ({ 
     gizmoSize: Math.max(0.1, Math.min(5.0, state.gizmoSize + delta)) 
   })),
   
   setPivotCommand: (command) => set({ pivotCommand: command }),
+  
+  setPivotMode: (mode) => set({ pivotMode: mode }),
+
+  toggleSnapEnabled: () => set((state) => ({ 
+      snapSettings: { ...state.snapSettings, enabled: !state.snapSettings.enabled } 
+  })),
+
+  setSnapMode: (mode, active) => set((state) => ({
+      snapSettings: { ...state.snapSettings, [mode]: active }
+  })),
 
   setUnit: (unit) => set({ unit }),
   
