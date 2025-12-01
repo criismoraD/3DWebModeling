@@ -23,19 +23,17 @@ const INITIAL_OBJECTS: SceneObject[] = [
 
 export const useAppStore = create<AppState>((set, get) => ({
   objects: JSON.parse(JSON.stringify(INITIAL_OBJECTS)),
-  selectedId: 'cube-1',
+  selectedIds: ['cube-1'],
   clipboard: null,
   pasteRequest: false,
   viewportLayout: 4,
   activeViewportId: 0,
-  // Default configuration for up to 4 viewports
   viewportConfigs: {
     0: 'top',
     1: 'perspective',
     2: 'front',
     3: 'side'
   },
-  // Default grid state for viewports
   viewportGridStates: {
     0: true,
     1: true,
@@ -45,9 +43,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   transformMode: 'translate',
   transformSpace: 'local',
   isGizmoEditMode: false,
-  gizmoSize: 0.5, // Smaller default because object is 0.1
+  gizmoSize: 0.5,
   pivotCommand: null,
-  unit: 'cm', // Default unit
+  unit: 'cm', 
   history: [JSON.parse(JSON.stringify(INITIAL_OBJECTS))],
   historyIndex: 0,
   
@@ -84,13 +82,40 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setUnit: (unit) => set({ unit }),
   
-  selectObject: (id) => set({ selectedId: id }),
+  // --- SELECTION LOGIC ---
+  
+  selectObject: (id, multi = false) => {
+      if (id === null) {
+          if (!multi) set({ selectedIds: [] });
+          return;
+      }
+      
+      const { selectedIds } = get();
+      
+      if (multi) {
+          // Toggle selection
+          if (selectedIds.includes(id)) {
+              set({ selectedIds: selectedIds.filter(sid => sid !== id) });
+          } else {
+              set({ selectedIds: [...selectedIds, id] });
+          }
+      } else {
+          // Single select (replace)
+          set({ selectedIds: [id] });
+      }
+  },
+
+  setSelection: (ids) => set({ selectedIds: ids }),
+  
+  selectAll: () => set((state) => ({ selectedIds: state.objects.map(o => o.id) })),
+  
+  deselectAll: () => set({ selectedIds: [] }),
   
   deleteSelected: () => {
-    const { selectedId, objects, history, historyIndex } = get();
-    if (!selectedId) return;
+    const { selectedIds, objects, history, historyIndex } = get();
+    if (selectedIds.length === 0) return;
 
-    const newObjects = objects.filter(o => o.id !== selectedId);
+    const newObjects = objects.filter(o => !selectedIds.includes(o.id));
 
     // Add to history
     const newHistory = history.slice(0, historyIndex + 1);
@@ -98,7 +123,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     
     set({
         objects: newObjects,
-        selectedId: null,
+        selectedIds: [],
         history: newHistory,
         historyIndex: newHistory.length - 1
     });
@@ -107,7 +132,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateObject: (id, changes, recordHistory = true) => {
     const { objects, history, historyIndex } = get();
     
-    // Create new objects array
     const newObjects = objects.map(obj => 
       obj.id === id ? { ...obj, ...changes } : obj
     );
@@ -117,15 +141,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (recordHistory) {
       const newHistory = history.slice(0, historyIndex + 1);
       newHistory.push(JSON.parse(JSON.stringify(newObjects)));
-      
-      // Limit history size
       if (newHistory.length > 50) newHistory.shift();
-      
       newState.history = newHistory;
       newState.historyIndex = newHistory.length - 1;
     }
 
     set(newState);
+  },
+
+  updateMultipleObjects: (updates, recordHistory = true) => {
+      const { objects, history, historyIndex } = get();
+      
+      // Create a map for faster lookup of changes
+      const changesMap = new Map(updates.map(u => [u.id, u.changes]));
+      
+      const newObjects = objects.map(obj => {
+          const changes = changesMap.get(obj.id);
+          return changes ? { ...obj, ...changes } : obj;
+      });
+
+      const newState: Partial<AppState> = { objects: newObjects };
+
+      if (recordHistory) {
+        const newHistory = history.slice(0, historyIndex + 1);
+        newHistory.push(JSON.parse(JSON.stringify(newObjects)));
+        if (newHistory.length > 50) newHistory.shift();
+        newState.history = newHistory;
+        newState.historyIndex = newHistory.length - 1;
+      }
+
+      set(newState);
   },
 
   toggleVisibility: (id) => {
@@ -145,12 +190,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   copy: () => {
-    const { selectedId, objects } = get();
-    if (!selectedId) return;
+    const { selectedIds, objects } = get();
+    if (selectedIds.length === 0) return;
     
-    const objToCopy = objects.find(o => o.id === selectedId);
-    if (objToCopy) {
-        set({ clipboard: JSON.parse(JSON.stringify(objToCopy)) });
+    // Copy all selected objects
+    const objsToCopy = objects.filter(o => selectedIds.includes(o.id));
+    if (objsToCopy.length > 0) {
+        set({ clipboard: JSON.parse(JSON.stringify(objsToCopy)) });
     }
   },
 
@@ -158,53 +204,72 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   paste: (position) => {
     const { clipboard, objects, history, historyIndex } = get();
-    if (!clipboard) return;
+    if (!clipboard || clipboard.length === 0) return;
 
-    // Deep clone clipboard to create new instance
-    const newObj = JSON.parse(JSON.stringify(clipboard));
+    const newObjectsToAdd: SceneObject[] = [];
+    const newSelectedIds: string[] = [];
     
-    // Generate new ID
-    const randomId = Math.random().toString(36).substr(2, 9);
-    newObj.id = `${newObj.geometry || 'obj'}-${randomId}`;
+    // Calculate center of clipboard objects to apply offset relative to group
+    let centerX = 0, centerY = 0, centerZ = 0;
+    clipboard.forEach(obj => {
+        centerX += obj.position.x;
+        centerY += obj.position.y;
+        centerZ += obj.position.z;
+    });
+    centerX /= clipboard.length;
+    centerY /= clipboard.length;
+    centerZ /= clipboard.length;
 
-    // --- SMART NAMING LOGIC ---
-    const nameMatch = newObj.name.match(/^(.*)_(\d+)$/);
-    let baseName = newObj.name;
-    if (nameMatch) {
-        baseName = nameMatch[1];
-    }
+    clipboard.forEach(clipObj => {
+        const newObj = JSON.parse(JSON.stringify(clipObj));
+        
+        // Generate new ID
+        const randomId = Math.random().toString(36).substr(2, 9);
+        newObj.id = `${newObj.geometry || 'obj'}-${randomId}`;
 
-    let maxSuffix = 0;
-    const regex = new RegExp(`^${baseName}_(\\d+)$`);
-    
-    objects.forEach(obj => {
-        const match = obj.name.match(regex);
-        if (match) {
-            const num = parseInt(match[1]);
-            if (num > maxSuffix) maxSuffix = num;
+        // Naming
+        const nameMatch = newObj.name.match(/^(.*)_(\d+)$/);
+        let baseName = newObj.name;
+        if (nameMatch) baseName = nameMatch[1];
+
+        let maxSuffix = 0;
+        const regex = new RegExp(`^${baseName}_(\\d+)$`);
+        objects.forEach(obj => {
+            const match = obj.name.match(regex);
+            if (match) {
+                const num = parseInt(match[1]);
+                if (num > maxSuffix) maxSuffix = num;
+            }
+        });
+        const nextSuffix = maxSuffix + 1;
+        newObj.name = `${baseName}_${nextSuffix.toString().padStart(2, '0')}`;
+        
+        // Positioning
+        if (position) {
+            // Apply relative offset from center
+            const offsetX = clipObj.position.x - centerX;
+            const offsetY = clipObj.position.y - centerY;
+            const offsetZ = clipObj.position.z - centerZ;
+            
+            newObj.position.x = position.x + offsetX;
+            newObj.position.y = position.y + offsetY;
+            newObj.position.z = position.z + offsetZ;
+        } else {
+            newObj.position.x += 0.1;
+            newObj.position.z += 0.1;
         }
+        
+        newObjectsToAdd.push(newObj);
+        newSelectedIds.push(newObj.id);
     });
 
-    const nextSuffix = maxSuffix + 1;
-    newObj.name = `${baseName}_${nextSuffix.toString().padStart(2, '0')}`;
-    
-    if (position) {
-        newObj.position.x = position.x;
-        newObj.position.y = position.y;
-        newObj.position.z = position.z;
-    } else {
-        newObj.position.x += 0.1;
-        newObj.position.z += 0.1;
-    }
-
-    const newObjects = [...objects, newObj];
-
+    const newObjects = [...objects, ...newObjectsToAdd];
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(JSON.parse(JSON.stringify(newObjects)));
     
     set({
         objects: newObjects,
-        selectedId: newObj.id,
+        selectedIds: newSelectedIds,
         history: newHistory,
         historyIndex: newHistory.length - 1,
         pasteRequest: false
@@ -232,7 +297,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newIndex = historyIndex - 1;
       set({
         historyIndex: newIndex,
-        objects: JSON.parse(JSON.stringify(history[newIndex]))
+        objects: JSON.parse(JSON.stringify(history[newIndex])),
+        selectedIds: [] // Clear selection on undo to avoid ghost references
       });
     }
   },
@@ -243,19 +309,19 @@ export const useAppStore = create<AppState>((set, get) => ({
       const newIndex = historyIndex + 1;
       set({
         historyIndex: newIndex,
-        objects: JSON.parse(JSON.stringify(history[newIndex]))
+        objects: JSON.parse(JSON.stringify(history[newIndex])),
+        selectedIds: []
       });
     }
   },
 
   // --- INTERACTION / DRAWING ACTIONS ---
   
-  setInteractionMode: (mode) => set({ interactionMode: mode, drawingPhase: 'idle', selectedId: null }),
+  setInteractionMode: (mode) => set({ interactionMode: mode, drawingPhase: 'idle', selectedIds: [] }),
   
   startDrawing: (pos) => {
       const { interactionMode, objects } = get();
       
-      // Determine base name and geometry
       let geometry = 'box';
       let namePrefix = 'Cube';
       
@@ -267,7 +333,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           namePrefix = 'Plane';
       }
 
-      // Generate Name
       let maxSuffix = 0;
       const regex = new RegExp(`^${namePrefix}_(\\d+)$`);
       objects.forEach(obj => {
@@ -286,10 +351,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         geometry,
         visible: true,
         position: { ...pos },
-        // Rotate Plane -90 degrees on X to lay flat by default
         rotation: interactionMode === 'create_plane' ? { x: -Math.PI / 2, y: 0, z: 0 } : { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
-        dimensions: { x: 0.01, y: 0.01, z: 0.01 }, // Start tiny
+        dimensions: { x: 0.01, y: 0.01, z: 0.01 },
         radius: 0.01,
         geometryOffset: { x: 0, y: 0, z: 0 },
         geometryRotation: { x: 0, y: 0, z: 0 }
@@ -297,41 +361,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       
       set({ 
           objects: [...objects, newObj],
-          selectedId: newObj.id,
+          selectedIds: [newObj.id],
           drawingStartPoint: pos,
           drawingPhase: 'drawing_base'
       });
   },
   
   updateDrawing: (pos) => {
-    const { drawingPhase, drawingStartPoint, selectedId, objects, interactionMode } = get();
-    if (!drawingStartPoint || !selectedId) return;
+    const { drawingPhase, drawingStartPoint, selectedIds, objects, interactionMode } = get();
+    if (!drawingStartPoint || selectedIds.length === 0) return;
 
-    // Find object to update
+    const activeId = selectedIds[0];
+
     const newObjects = objects.map(obj => {
-        if (obj.id !== selectedId) return obj;
+        if (obj.id !== activeId) return obj;
         
         const updatedObj = { ...obj };
         
         if (drawingPhase === 'drawing_base') {
-            // BASE PHASE: Update X/Z dimensions
             const dx = pos.x - drawingStartPoint.x;
             const dz = pos.z - drawingStartPoint.z;
             
-            // For Sphere, distance is radius
             if (interactionMode === 'create_sphere') {
                 const dist = Math.sqrt(dx*dx + dz*dz);
                 updatedObj.radius = dist;
-                updatedObj.position = { ...drawingStartPoint }; // Stays at center
+                updatedObj.position = { ...drawingStartPoint }; 
             } else {
-                // For Box/Plane, dimensions are abs delta
                 updatedObj.dimensions = { 
                     x: Math.abs(dx), 
-                    y: 0.01, // Flat initial height for box
+                    y: 0.01,
                     z: Math.abs(dz) 
                 };
-                
-                // Position is midpoint
                 updatedObj.position = {
                     x: drawingStartPoint.x + dx / 2,
                     y: drawingStartPoint.y,
@@ -339,16 +399,11 @@ export const useAppStore = create<AppState>((set, get) => ({
                 };
             }
         } else if (drawingPhase === 'drawing_height' && interactionMode === 'create_cube') {
-            // HEIGHT PHASE: Update Y dimension
-            // pos.y here represents the calculated height value from the viewport
             const height = pos.y - drawingStartPoint.y;
-            
             updatedObj.dimensions = {
                 ...updatedObj.dimensions,
                 y: Math.abs(height)
             };
-            
-            // Adjust Y position so base stays on ground
             updatedObj.position = {
                 ...updatedObj.position,
                 y: drawingStartPoint.y + height / 2
@@ -365,18 +420,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { interactionMode, recordHistory } = get();
       
       if (interactionMode === 'create_cube') {
-          // Continue to height phase
           set({ drawingPhase: 'drawing_height' });
       } else {
-          // Sphere/Plane finish immediately on mouse up
           recordHistory();
-          set({ drawingPhase: 'idle', drawingStartPoint: null }); // Keep tool active
+          set({ drawingPhase: 'idle', drawingStartPoint: null, interactionMode: 'select' });
       }
   },
   
   finishDrawing: () => {
       const { recordHistory } = get();
       recordHistory();
-      set({ drawingPhase: 'idle', drawingStartPoint: null }); // Keep tool active
+      set({ drawingPhase: 'idle', drawingStartPoint: null, interactionMode: 'select' });
   }
 }));

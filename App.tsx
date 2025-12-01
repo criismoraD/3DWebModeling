@@ -26,7 +26,8 @@ import {
   Trash2,
   Square,
   Circle,
-  Component
+  Component,
+  Layers
 } from 'lucide-react';
 
 const HeaderButton: React.FC<{ 
@@ -181,7 +182,7 @@ const MenuBar = () => {
 };
 
 const SceneExplorer = () => {
-  const { objects, selectedId, selectObject, toggleVisibility } = useAppStore();
+  const { objects, selectedIds, selectObject, toggleVisibility } = useAppStore();
 
   return (
     <div className="flex-1 flex flex-col border-b border-gray-950 min-h-[40%]">
@@ -193,25 +194,31 @@ const SceneExplorer = () => {
             <Globe size={12} /> Scene Root
         </div>
         <div className="pl-4">
-            {objects.map(obj => (
-                <div 
-                    key={obj.id}
-                    onClick={() => selectObject(obj.id)}
-                    className={`
-                        group flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs mb-0.5
-                        ${selectedId === obj.id ? 'bg-accent-600 text-white' : 'text-gray-300 hover:bg-gray-750'}
-                    `}
-                >
-                    <Box size={12} className={selectedId === obj.id ? 'text-white' : 'text-accent-500'} />
-                    <span className="flex-1">{obj.name}</span>
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); toggleVisibility(obj.id); }}
-                        className={`hover:bg-black/20 p-0.5 rounded ${selectedId === obj.id ? 'text-white' : 'text-gray-500'}`}
+            {objects.map(obj => {
+                const isSelected = selectedIds.includes(obj.id);
+                return (
+                    <div 
+                        key={obj.id}
+                        onClick={(e) => {
+                             e.stopPropagation(); 
+                             selectObject(obj.id, e.ctrlKey || e.shiftKey); 
+                        }}
+                        className={`
+                            group flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs mb-0.5
+                            ${isSelected ? 'bg-accent-600 text-white' : 'text-gray-300 hover:bg-gray-750'}
+                        `}
                     >
-                        {obj.visible ? <Eye size={12} /> : <EyeOff size={12} />}
-                    </button>
-                </div>
-            ))}
+                        <Box size={12} className={isSelected ? 'text-white' : 'text-accent-500'} />
+                        <span className="flex-1">{obj.name}</span>
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); toggleVisibility(obj.id); }}
+                            className={`hover:bg-black/20 p-0.5 rounded ${isSelected ? 'text-white' : 'text-gray-500'}`}
+                        >
+                            {obj.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                        </button>
+                    </div>
+                );
+            })}
         </div>
       </div>
     </div>
@@ -219,10 +226,9 @@ const SceneExplorer = () => {
 };
 
 const PropertiesPanel = () => {
-  const { objects, selectedId, updateObject, setPivotCommand, unit } = useAppStore();
-  const selectedObject = objects.find(o => o.id === selectedId);
-
-  if (!selectedObject) {
+  const { objects, selectedIds, updateObject, setPivotCommand, unit } = useAppStore();
+  
+  if (selectedIds.length === 0) {
     return (
       <div className="flex-1 bg-gray-850 p-4 text-gray-500 text-xs text-center flex flex-col items-center justify-center">
         <BoxSelect size={32} className="mb-2 opacity-50"/>
@@ -230,6 +236,12 @@ const PropertiesPanel = () => {
       </div>
     );
   }
+
+  // If multiple selected, we could show "Multiple" or edit the last selected
+  const isMulti = selectedIds.length > 1;
+  const selectedObject = objects.find(o => o.id === selectedIds[selectedIds.length - 1]);
+
+  if (!selectedObject) return null;
 
   const toDeg = (rad: number) => Math.round(rad * (180 / Math.PI) * 10) / 10;
   const toRad = (deg: number) => deg * (Math.PI / 180);
@@ -252,6 +264,14 @@ const PropertiesPanel = () => {
         <BoxSelect size={12} /> Properties
       </div>
       
+      {isMulti && (
+          <div className="px-3 py-2 bg-accent-600/20 border-b border-accent-600/30 text-accent-400 text-xs flex items-center gap-2">
+              <Layers size={14} />
+              <span>{selectedIds.length} Objects Selected</span>
+              <span className="text-[10px] opacity-60 ml-auto">Editing Primary</span>
+          </div>
+      )}
+      
       <div className="p-3 space-y-4">
         {/* Identity Group */}
         <div className="space-y-2">
@@ -261,8 +281,9 @@ const PropertiesPanel = () => {
                 <input 
                     type="text" 
                     value={selectedObject.name}
+                    disabled={isMulti}
                     onChange={(e) => updateObject(selectedObject.id, { name: e.target.value })}
-                    className="flex-1 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-accent-500"
+                    className={`flex-1 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-gray-300 focus:outline-none focus:border-accent-500 ${isMulti ? 'opacity-50' : ''}`}
                 />
             </div>
             <div className="flex items-center gap-2 text-xs">
@@ -420,7 +441,7 @@ export default function App() {
           case 'r': store.setTransformMode('scale'); break;
           case 'd': store.toggleGizmoEditMode(); break; // Toggle Gizmo Mode
           case 'h': 
-            if(store.selectedId) store.toggleVisibility(store.selectedId); 
+            if(store.selectedIds.length > 0) store.selectedIds.forEach(id => store.toggleVisibility(id)); 
             break;
           // Viewport shortcuts
           case 't': store.setViewportType(store.activeViewportId, 'top'); break;
@@ -486,23 +507,15 @@ export default function App() {
 
       {/* Status Bar */}
       <div className="h-6 bg-gray-850 border-t border-gray-950 flex items-center px-4 gap-4 text-[10px] text-gray-500">
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">LMB</kbd> Select</span>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">RMB</kbd> Orbit</span>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">MMB</kbd> Pan</span>
+        <div className="w-px h-3 bg-gray-700 mx-2"></div>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">W</kbd> Move</span>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">E</kbd> Rotate</span>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">R</kbd> Scale</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">D</kbd> Edit Pivot</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">G</kbd> Grid</span>
         <div className="w-px h-3 bg-gray-700 mx-2"></div>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">T</kbd> Top</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">F</kbd> Front</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">L</kbd> Left</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">P</kbd> Persp</span>
-        <div className="w-px h-3 bg-gray-700 mx-2"></div>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">+</kbd><kbd className="bg-gray-700 px-1 rounded text-gray-300">-</kbd> Gizmo Size</span>
-        <div className="flex-1"></div>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+C</kbd> Copy</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+V</kbd> Paste</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Del</kbd> Delete</span>
-        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+Z</kbd> Undo</span>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+C/V</kbd> Copy/Paste</span>
       </div>
     </div>
   );

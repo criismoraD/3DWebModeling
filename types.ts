@@ -30,8 +30,8 @@ export interface SceneObject {
 
 export interface AppState {
   objects: SceneObject[];
-  selectedId: string | null;
-  clipboard: SceneObject | null; // Stores the copied object
+  selectedIds: string[]; // Changed from selectedId to array
+  clipboard: SceneObject[] | null; // Stores the copied objects
   pasteRequest: boolean; // Signal to viewports to handle paste at cursor
   viewportLayout: 1 | 2 | 4;
   activeViewportId: number;
@@ -62,9 +62,18 @@ export interface AppState {
   updateGizmoSize: (delta: number) => void;
   setPivotCommand: (command: PivotCommand) => void;
   setUnit: (unit: UnitType) => void;
-  selectObject: (id: string | null) => void;
+  
+  // Selection Actions
+  selectObject: (id: string | null, multi?: boolean) => void; // Multi flag for ctrl/shift click
+  setSelection: (ids: string[]) => void;
+  selectAll: () => void;
+  deselectAll: () => void;
+
   deleteSelected: () => void;
   updateObject: (id: string, changes: Partial<SceneObject>, recordHistory?: boolean) => void;
+  // New: Update multiple objects at once (for transforms)
+  updateMultipleObjects: (updates: {id: string, changes: Partial<SceneObject>}[], recordHistory?: boolean) => void;
+
   toggleVisibility: (id: string) => void;
   undo: () => void;
   redo: () => void;
