@@ -1,3 +1,4 @@
+
 import { create } from 'zustand';
 import { AppState, SceneObject } from './types';
 
@@ -49,6 +50,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   unit: 'cm', // Default unit
   history: [JSON.parse(JSON.stringify(INITIAL_OBJECTS))],
   historyIndex: 0,
+  
+  interactionMode: 'select',
+  drawingPhase: 'idle',
+  drawingStartPoint: null,
 
   setViewportLayout: (layout) => set({ viewportLayout: layout }),
   
@@ -162,19 +167,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const randomId = Math.random().toString(36).substr(2, 9);
     newObj.id = `${newObj.geometry || 'obj'}-${randomId}`;
 
-    // --- SMART NAMING LOGIC (Cube -> Cube_01 -> Cube_02) ---
-    // 1. Identify Base Name (e.g., "Cube_05" -> "Cube")
+    // --- SMART NAMING LOGIC ---
     const nameMatch = newObj.name.match(/^(.*)_(\d+)$/);
     let baseName = newObj.name;
     if (nameMatch) {
         baseName = nameMatch[1];
     }
 
-    // 2. Find max suffix for this base name
     let maxSuffix = 0;
-    // If the base name itself exists (e.g. "Cube"), we start counting from 1
-    const baseExists = objects.some(o => o.name === baseName);
-    
     const regex = new RegExp(`^${baseName}_(\\d+)$`);
     
     objects.forEach(obj => {
@@ -185,45 +185,39 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
     });
 
-    // If we only have "Cube", maxSuffix is 0, so next is 01.
-    // If we have "Cube_02", maxSuffix is 2, next is 03.
     const nextSuffix = maxSuffix + 1;
     newObj.name = `${baseName}_${nextSuffix.toString().padStart(2, '0')}`;
     
-    // --- POSITIONING ---
     if (position) {
         newObj.position.x = position.x;
         newObj.position.y = position.y;
         newObj.position.z = position.z;
     } else {
-        // Fallback: Offset position slightly to make duplication visible
         newObj.position.x += 0.1;
         newObj.position.z += 0.1;
     }
 
     const newObjects = [...objects, newObj];
 
-    // Add to history
     const newHistory = history.slice(0, historyIndex + 1);
     newHistory.push(JSON.parse(JSON.stringify(newObjects)));
     
     set({
         objects: newObjects,
-        selectedId: newObj.id, // Select the new object
+        selectedId: newObj.id,
         history: newHistory,
         historyIndex: newHistory.length - 1,
-        pasteRequest: false // Reset request flag
+        pasteRequest: false
     });
   },
 
   recordHistory: () => {
     const { objects, history, historyIndex } = get();
     const newHistory = history.slice(0, historyIndex + 1);
-    // Only push if different
     const currentSnapshot = JSON.stringify(objects);
     const lastSnapshot = JSON.stringify(history[historyIndex]);
     
-    if (currentSnapshot !== lastSnapshot) { 
+    if (currentSnapshot !== lastSnapshot) {
         newHistory.push(JSON.parse(currentSnapshot));
         set({ 
             history: newHistory,
@@ -252,5 +246,137 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: JSON.parse(JSON.stringify(history[newIndex]))
       });
     }
+  },
+
+  // --- INTERACTION / DRAWING ACTIONS ---
+  
+  setInteractionMode: (mode) => set({ interactionMode: mode, drawingPhase: 'idle', selectedId: null }),
+  
+  startDrawing: (pos) => {
+      const { interactionMode, objects } = get();
+      
+      // Determine base name and geometry
+      let geometry = 'box';
+      let namePrefix = 'Cube';
+      
+      if (interactionMode === 'create_sphere') {
+          geometry = 'sphere';
+          namePrefix = 'Sphere';
+      } else if (interactionMode === 'create_plane') {
+          geometry = 'plane';
+          namePrefix = 'Plane';
+      }
+
+      // Generate Name
+      let maxSuffix = 0;
+      const regex = new RegExp(`^${namePrefix}_(\\d+)$`);
+      objects.forEach(obj => {
+          const match = obj.name.match(regex);
+          if (match) {
+            const num = parseInt(match[1]);
+            if (num > maxSuffix) maxSuffix = num;
+          }
+      });
+      const name = `${namePrefix}_${(maxSuffix + 1).toString().padStart(2, '0')}`;
+      
+      const newObj: SceneObject = {
+        id: `${geometry}-${Math.random().toString(36).substr(2, 9)}`,
+        name,
+        type: 'mesh',
+        geometry,
+        visible: true,
+        position: { ...pos },
+        // Rotate Plane -90 degrees on X to lay flat by default
+        rotation: interactionMode === 'create_plane' ? { x: -Math.PI / 2, y: 0, z: 0 } : { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        dimensions: { x: 0.01, y: 0.01, z: 0.01 }, // Start tiny
+        radius: 0.01,
+        geometryOffset: { x: 0, y: 0, z: 0 },
+        geometryRotation: { x: 0, y: 0, z: 0 }
+      };
+      
+      set({ 
+          objects: [...objects, newObj],
+          selectedId: newObj.id,
+          drawingStartPoint: pos,
+          drawingPhase: 'drawing_base'
+      });
+  },
+  
+  updateDrawing: (pos) => {
+    const { drawingPhase, drawingStartPoint, selectedId, objects, interactionMode } = get();
+    if (!drawingStartPoint || !selectedId) return;
+
+    // Find object to update
+    const newObjects = objects.map(obj => {
+        if (obj.id !== selectedId) return obj;
+        
+        const updatedObj = { ...obj };
+        
+        if (drawingPhase === 'drawing_base') {
+            // BASE PHASE: Update X/Z dimensions
+            const dx = pos.x - drawingStartPoint.x;
+            const dz = pos.z - drawingStartPoint.z;
+            
+            // For Sphere, distance is radius
+            if (interactionMode === 'create_sphere') {
+                const dist = Math.sqrt(dx*dx + dz*dz);
+                updatedObj.radius = dist;
+                updatedObj.position = { ...drawingStartPoint }; // Stays at center
+            } else {
+                // For Box/Plane, dimensions are abs delta
+                updatedObj.dimensions = { 
+                    x: Math.abs(dx), 
+                    y: 0.01, // Flat initial height for box
+                    z: Math.abs(dz) 
+                };
+                
+                // Position is midpoint
+                updatedObj.position = {
+                    x: drawingStartPoint.x + dx / 2,
+                    y: drawingStartPoint.y,
+                    z: drawingStartPoint.z + dz / 2
+                };
+            }
+        } else if (drawingPhase === 'drawing_height' && interactionMode === 'create_cube') {
+            // HEIGHT PHASE: Update Y dimension
+            // pos.y here represents the calculated height value from the viewport
+            const height = pos.y - drawingStartPoint.y;
+            
+            updatedObj.dimensions = {
+                ...updatedObj.dimensions,
+                y: Math.abs(height)
+            };
+            
+            // Adjust Y position so base stays on ground
+            updatedObj.position = {
+                ...updatedObj.position,
+                y: drawingStartPoint.y + height / 2
+            };
+        }
+        
+        return updatedObj;
+    });
+
+    set({ objects: newObjects });
+  },
+  
+  stopDrawingBase: () => {
+      const { interactionMode, recordHistory } = get();
+      
+      if (interactionMode === 'create_cube') {
+          // Continue to height phase
+          set({ drawingPhase: 'drawing_height' });
+      } else {
+          // Sphere/Plane finish immediately on mouse up
+          recordHistory();
+          set({ drawingPhase: 'idle', drawingStartPoint: null }); // Keep tool active
+      }
+  },
+  
+  finishDrawing: () => {
+      const { recordHistory } = get();
+      recordHistory();
+      set({ drawingPhase: 'idle', drawingStartPoint: null }); // Keep tool active
   }
 }));

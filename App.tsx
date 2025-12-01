@@ -1,3 +1,4 @@
+
 import React, { useEffect } from 'react';
 import { useAppStore } from './store';
 import { Viewport3D } from './components/Viewport3D';
@@ -7,7 +8,6 @@ import {
   Eye, 
   EyeOff, 
   Grid3X3, 
-  Maximize, 
   Move, 
   RotateCw, 
   Scaling, 
@@ -23,7 +23,10 @@ import {
   Ruler,
   Copy,
   Clipboard,
-  Trash2
+  Trash2,
+  Square,
+  Circle,
+  Component
 } from 'lucide-react';
 
 const HeaderButton: React.FC<{ 
@@ -51,20 +54,13 @@ const PropertyInput: React.FC<{
   color: string; 
   onChange: (val: number) => void;
   step?: number;
-  conversionFactor?: number; // Multiply internal value by this for display
+  conversionFactor?: number;
 }> = ({ label, value, color, onChange, step = 0.1, conversionFactor = 1 }) => {
-  
-  // Calculate display value
   const displayValue = value * conversionFactor;
-  
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const newVal = parseFloat(e.target.value);
-      if (!isNaN(newVal)) {
-          // Convert back to internal unit
-          onChange(newVal / conversionFactor);
-      }
+      if (!isNaN(newVal)) onChange(newVal / conversionFactor);
   };
-
   return (
     <div className="flex items-center gap-1 flex-1 bg-gray-850 border border-gray-700 rounded-sm overflow-hidden">
         <div className={`w-4 text-[10px] flex items-center justify-center font-bold ${color}`}>
@@ -101,9 +97,7 @@ const MenuBar = () => {
       </div>
 
       <div className="flex items-center gap-2 pr-4 border-r border-gray-600">
-         <div className="flex items-center gap-1 text-gray-400">
-            <Ruler size={14} />
-         </div>
+         <div className="flex items-center gap-1 text-gray-400"><Ruler size={14} /></div>
          <select 
             value={store.unit} 
             onChange={(e) => store.setUnit(e.target.value as UnitType)}
@@ -121,10 +115,26 @@ const MenuBar = () => {
           <Grid3X3 size={14} />
         </HeaderButton>
       </div>
+      
+      {/* Creation Tools */}
+      <div className="flex items-center gap-1 pr-4 border-r border-gray-600">
+         <HeaderButton active={store.interactionMode === 'select'} onClick={() => store.setInteractionMode('select')} title="Select Object">
+           <Move size={14} />
+         </HeaderButton>
+         <HeaderButton active={store.interactionMode === 'create_cube'} onClick={() => store.setInteractionMode('create_cube')} title="Create Cube">
+           <Box size={14} />
+         </HeaderButton>
+         <HeaderButton active={store.interactionMode === 'create_sphere'} onClick={() => store.setInteractionMode('create_sphere')} title="Create Sphere">
+           <Circle size={14} />
+         </HeaderButton>
+         <HeaderButton active={store.interactionMode === 'create_plane'} onClick={() => store.setInteractionMode('create_plane')} title="Create Plane">
+           <Square size={14} />
+         </HeaderButton>
+      </div>
 
       <div className="flex items-center gap-1">
         <HeaderButton active={store.transformMode === 'translate'} onClick={() => store.setTransformMode('translate')} title="Translate (W)">
-          <Move size={14} />
+          <Component size={14} />
         </HeaderButton>
         <HeaderButton active={store.transformMode === 'rotate'} onClick={() => store.setTransformMode('rotate')} title="Rotate (E)">
           <RotateCw size={14} />
@@ -150,24 +160,21 @@ const MenuBar = () => {
             <Anchor size={12} /> EDITING GIZMO
          </div>
       )}
+      
+      {/* Creation Status */}
+      {store.interactionMode !== 'select' && (
+         <div className="ml-4 px-2 py-1 bg-blue-600/20 text-blue-500 border border-blue-600/50 rounded text-xs font-bold flex items-center gap-2">
+            CREATING: {store.interactionMode.replace('create_', '').toUpperCase()}
+         </div>
+      )}
 
       <div className="flex items-center gap-1 ml-auto">
-        <HeaderButton onClick={store.copy} title="Copy (Ctrl+C)" active={false}>
-          <Copy size={14} />
-        </HeaderButton>
-        <HeaderButton onClick={() => store.setRequestPaste(true)} title="Paste (Ctrl+V)" active={false}>
-          <Clipboard size={14} />
-        </HeaderButton>
-        <HeaderButton onClick={store.deleteSelected} title="Delete (Del)" active={false}>
-          <Trash2 size={14} />
-        </HeaderButton>
+        <HeaderButton onClick={store.copy} title="Copy (Ctrl+C)" active={false}><Copy size={14} /></HeaderButton>
+        <HeaderButton onClick={() => store.setRequestPaste(true)} title="Paste (Ctrl+V)" active={false}><Clipboard size={14} /></HeaderButton>
+        <HeaderButton onClick={store.deleteSelected} title="Delete (Del)" active={false}><Trash2 size={14} /></HeaderButton>
         <div className="w-px h-3 bg-gray-600 mx-1"></div>
-        <HeaderButton onClick={store.undo} title="Undo (Ctrl+Z)" active={false}>
-          <Undo size={14} />
-        </HeaderButton>
-        <HeaderButton onClick={store.redo} title="Redo (Ctrl+Y)" active={false}>
-          <Redo size={14} />
-        </HeaderButton>
+        <HeaderButton onClick={store.undo} title="Undo (Ctrl+Z)" active={false}><Undo size={14} /></HeaderButton>
+        <HeaderButton onClick={store.redo} title="Redo (Ctrl+Y)" active={false}><Redo size={14} /></HeaderButton>
       </div>
     </div>
   );
@@ -224,11 +231,9 @@ const PropertiesPanel = () => {
     );
   }
 
-  // Helper to convert rad to deg
   const toDeg = (rad: number) => Math.round(rad * (180 / Math.PI) * 10) / 10;
   const toRad = (deg: number) => deg * (Math.PI / 180);
 
-  // Unit Multipliers (Base Unit = Meter)
   const getUnitFactor = (u: UnitType) => {
       switch(u) {
           case 'mm': return 1000;
@@ -274,89 +279,52 @@ const PropertiesPanel = () => {
         <div className="space-y-3">
             <div className="text-[10px] font-bold text-gray-500 uppercase bg-gray-950/50 px-2 py-1 rounded">Transform</div>
             
-            {/* Position */}
             <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">Position ({unit})</label>
                 <div className="flex gap-1">
-                    <PropertyInput 
-                        label="X" color="text-red-500" value={selectedObject.position.x} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { position: { ...selectedObject.position, x: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Y" color="text-green-500" value={selectedObject.position.y} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { position: { ...selectedObject.position, y: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Z" color="text-blue-500" value={selectedObject.position.z} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { position: { ...selectedObject.position, z: v } })} 
-                    />
+                    <PropertyInput label="X" color="text-red-500" value={selectedObject.position.x} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { position: { ...selectedObject.position, x: v } })} />
+                    <PropertyInput label="Y" color="text-green-500" value={selectedObject.position.y} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { position: { ...selectedObject.position, y: v } })} />
+                    <PropertyInput label="Z" color="text-blue-500" value={selectedObject.position.z} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { position: { ...selectedObject.position, z: v } })} />
                 </div>
             </div>
 
-            {/* Rotation */}
             <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">Rotation (Deg)</label>
                 <div className="flex gap-1">
-                    <PropertyInput 
-                        label="X" color="text-red-500" value={toDeg(selectedObject.rotation.x)} step={1}
-                        onChange={(v) => updateObject(selectedObject.id, { rotation: { ...selectedObject.rotation, x: toRad(v) } })} 
-                    />
-                    <PropertyInput 
-                        label="Y" color="text-green-500" value={toDeg(selectedObject.rotation.y)} step={1}
-                        onChange={(v) => updateObject(selectedObject.id, { rotation: { ...selectedObject.rotation, y: toRad(v) } })} 
-                    />
-                    <PropertyInput 
-                        label="Z" color="text-blue-500" value={toDeg(selectedObject.rotation.z)} step={1}
-                        onChange={(v) => updateObject(selectedObject.id, { rotation: { ...selectedObject.rotation, z: toRad(v) } })} 
-                    />
+                    <PropertyInput label="X" color="text-red-500" value={toDeg(selectedObject.rotation.x)} step={1} onChange={(v) => updateObject(selectedObject.id, { rotation: { ...selectedObject.rotation, x: toRad(v) } })} />
+                    <PropertyInput label="Y" color="text-green-500" value={toDeg(selectedObject.rotation.y)} step={1} onChange={(v) => updateObject(selectedObject.id, { rotation: { ...selectedObject.rotation, y: toRad(v) } })} />
+                    <PropertyInput label="Z" color="text-blue-500" value={toDeg(selectedObject.rotation.z)} step={1} onChange={(v) => updateObject(selectedObject.id, { rotation: { ...selectedObject.rotation, z: toRad(v) } })} />
                 </div>
             </div>
 
-            {/* Scale */}
             <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">Scale (Factor)</label>
                 <div className="flex gap-1">
-                    <PropertyInput 
-                        label="X" color="text-red-500" value={selectedObject.scale.x} 
-                        conversionFactor={1}
-                        onChange={(v) => updateObject(selectedObject.id, { scale: { ...selectedObject.scale, x: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Y" color="text-green-500" value={selectedObject.scale.y} 
-                        conversionFactor={1}
-                        onChange={(v) => updateObject(selectedObject.id, { scale: { ...selectedObject.scale, y: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Z" color="text-blue-500" value={selectedObject.scale.z} 
-                        conversionFactor={1}
-                        onChange={(v) => updateObject(selectedObject.id, { scale: { ...selectedObject.scale, z: v } })} 
-                    />
+                    <PropertyInput label="X" color="text-red-500" value={selectedObject.scale.x} conversionFactor={1} onChange={(v) => updateObject(selectedObject.id, { scale: { ...selectedObject.scale, x: v } })} />
+                    <PropertyInput label="Y" color="text-green-500" value={selectedObject.scale.y} conversionFactor={1} onChange={(v) => updateObject(selectedObject.id, { scale: { ...selectedObject.scale, y: v } })} />
+                    <PropertyInput label="Z" color="text-blue-500" value={selectedObject.scale.z} conversionFactor={1} onChange={(v) => updateObject(selectedObject.id, { scale: { ...selectedObject.scale, z: v } })} />
                 </div>
             </div>
 
-             {/* Dimensions */}
+             {/* Dimensions / Parameters based on geometry */}
              <div className="space-y-1">
-                <label className="text-[10px] text-gray-500">Dimensions ({unit})</label>
-                <div className="flex gap-1">
-                    <PropertyInput 
-                        label="X" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.x : 0.1} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, x: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Y" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.y : 0.1} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, y: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Z" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.z : 0.1} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, z: v } })} 
-                    />
-                </div>
+                <label className="text-[10px] text-gray-500">
+                    {selectedObject.geometry === 'sphere' ? `Radius (${unit})` : `Dimensions (${unit})`}
+                </label>
+                
+                {selectedObject.geometry === 'sphere' ? (
+                     <div className="flex gap-1">
+                         <PropertyInput label="R" color="text-orange-400" value={selectedObject.radius || 0.1} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { radius: v })} />
+                     </div>
+                ) : (
+                    <div className="flex gap-1">
+                        <PropertyInput label="X" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.x : 0.1} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, x: v } })} />
+                        {selectedObject.geometry !== 'plane' && (
+                             <PropertyInput label="Y" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.y : 0.1} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, y: v } })} />
+                        )}
+                        <PropertyInput label="Z" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.z : 0.1} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, z: v } })} />
+                    </div>
+                )}
             </div>
         </div>
         
@@ -366,71 +334,31 @@ const PropertiesPanel = () => {
                 <span>Pivot Offset (Local)</span>
                 <span className="text-[9px] text-gray-600">Advanced</span>
             </div>
-
-             {/* Tools */}
              <div className="grid grid-cols-3 gap-1 mb-2">
-                 <button 
-                    onClick={() => setPivotCommand('center')}
-                    className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12"
-                    title="Center Pivot to Object"
-                 >
-                    <AlignCenter size={14} />
-                    <span className="text-[9px]">Center</span>
+                 <button onClick={() => setPivotCommand('center')} className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12" title="Center Pivot to Object">
+                    <AlignCenter size={14} /><span className="text-[9px]">Center</span>
                  </button>
-                 <button 
-                    onClick={() => setPivotCommand('bottom')}
-                    className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12"
-                    title="Pivot to Bottom Center"
-                 >
-                    <ArrowDownToLine size={14} />
-                    <span className="text-[9px]">Bottom</span>
+                 <button onClick={() => setPivotCommand('bottom')} className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12" title="Pivot to Bottom Center">
+                    <ArrowDownToLine size={14} /><span className="text-[9px]">Bottom</span>
                  </button>
-                 <button 
-                    onClick={() => setPivotCommand('reset')}
-                    className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12"
-                    title="Reset Pivot to World (0,0,0)"
-                 >
-                    <RefreshCcw size={14} />
-                    <span className="text-[9px]">Reset</span>
+                 <button onClick={() => setPivotCommand('reset')} className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12" title="Reset Pivot to World (0,0,0)">
+                    <RefreshCcw size={14} /><span className="text-[9px]">Reset</span>
                  </button>
              </div>
-
              <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">Offset Position ({unit})</label>
                 <div className="flex gap-1">
-                    <PropertyInput 
-                        label="X" color="text-gray-500" value={selectedObject.geometryOffset.x} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { geometryOffset: { ...selectedObject.geometryOffset, x: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Y" color="text-gray-500" value={selectedObject.geometryOffset.y} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { geometryOffset: { ...selectedObject.geometryOffset, y: v } })} 
-                    />
-                    <PropertyInput 
-                        label="Z" color="text-gray-500" value={selectedObject.geometryOffset.z} 
-                        conversionFactor={factor}
-                        onChange={(v) => updateObject(selectedObject.id, { geometryOffset: { ...selectedObject.geometryOffset, z: v } })} 
-                    />
+                    <PropertyInput label="X" color="text-gray-500" value={selectedObject.geometryOffset.x} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { geometryOffset: { ...selectedObject.geometryOffset, x: v } })} />
+                    <PropertyInput label="Y" color="text-gray-500" value={selectedObject.geometryOffset.y} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { geometryOffset: { ...selectedObject.geometryOffset, y: v } })} />
+                    <PropertyInput label="Z" color="text-gray-500" value={selectedObject.geometryOffset.z} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { geometryOffset: { ...selectedObject.geometryOffset, z: v } })} />
                 </div>
             </div>
-            
              <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">Offset Rotation (Deg)</label>
                 <div className="flex gap-1">
-                    <PropertyInput 
-                        label="X" color="text-gray-500" value={toDeg(selectedObject.geometryRotation ? selectedObject.geometryRotation.x : 0)} 
-                        onChange={(v) => updateObject(selectedObject.id, { geometryRotation: { ...selectedObject.geometryRotation, x: toRad(v) } })} 
-                    />
-                    <PropertyInput 
-                        label="Y" color="text-gray-500" value={toDeg(selectedObject.geometryRotation ? selectedObject.geometryRotation.y : 0)} 
-                        onChange={(v) => updateObject(selectedObject.id, { geometryRotation: { ...selectedObject.geometryRotation, y: toRad(v) } })} 
-                    />
-                    <PropertyInput 
-                        label="Z" color="text-gray-500" value={toDeg(selectedObject.geometryRotation ? selectedObject.geometryRotation.z : 0)} 
-                        onChange={(v) => updateObject(selectedObject.id, { geometryRotation: { ...selectedObject.geometryRotation, z: toRad(v) } })} 
-                    />
+                    <PropertyInput label="X" color="text-gray-500" value={toDeg(selectedObject.geometryRotation ? selectedObject.geometryRotation.x : 0)} onChange={(v) => updateObject(selectedObject.id, { geometryRotation: { ...selectedObject.geometryRotation, x: toRad(v) } })} />
+                    <PropertyInput label="Y" color="text-gray-500" value={toDeg(selectedObject.geometryRotation ? selectedObject.geometryRotation.y : 0)} onChange={(v) => updateObject(selectedObject.id, { geometryRotation: { ...selectedObject.geometryRotation, y: toRad(v) } })} />
+                    <PropertyInput label="Z" color="text-gray-500" value={toDeg(selectedObject.geometryRotation ? selectedObject.geometryRotation.z : 0)} onChange={(v) => updateObject(selectedObject.id, { geometryRotation: { ...selectedObject.geometryRotation, z: toRad(v) } })} />
                 </div>
             </div>
         </div>
@@ -444,7 +372,6 @@ const ViewportRenderer: React.FC<{ id: number }> = ({ id }) => {
   const { viewportConfigs } = useAppStore();
   const type = viewportConfigs[id] || 'perspective';
   
-  // Format label to look nice (e.g. 'top' -> 'Top', 'side' -> 'Side (Right)')
   const getLabel = (t: ViewportType) => {
     switch(t) {
       case 'perspective': return 'Perspective';
