@@ -20,8 +20,11 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
     gridVisible, 
     activeViewportId, 
     isGizmoEditMode,
+    gizmoSize,
+    pivotCommand,
     updateObject,
     selectObject,
+    setPivotCommand,
     recordHistory
   } = useAppStore();
 
@@ -43,6 +46,78 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
       setTransformTarget(undefined);
     }
   }, [selectedId, scene, objects]);
+
+  // Handle Pivot Commands (Center, Bottom, Reset)
+  useEffect(() => {
+    if (pivotCommand && selectedId && activeViewportId === viewportId) {
+        const group = scene.getObjectByName(selectedId);
+        
+        if (group && group.children.length > 0) {
+            const mesh = group.children[0]; // The Geometry
+            
+            // 1. Capture current Mesh World State (Where it is physically)
+            const meshWorldPos = new THREE.Vector3();
+            const meshWorldQuat = new THREE.Quaternion();
+            mesh.getWorldPosition(meshWorldPos);
+            mesh.getWorldQuaternion(meshWorldQuat);
+
+            // 2. Determine NEW Group (Pivot) Position/Rotation
+            const newGroupPos = group.position.clone();
+            const newGroupQuat = group.quaternion.clone();
+
+            const bbox = new THREE.Box3().setFromObject(mesh); // World Bounding Box
+
+            if (pivotCommand === 'center') {
+                // Move pivot to Center of Bounds
+                bbox.getCenter(newGroupPos);
+                // Keep current rotation
+            } else if (pivotCommand === 'bottom') {
+                // Move pivot to Bottom Center of Bounds
+                bbox.getCenter(newGroupPos);
+                newGroupPos.y = bbox.min.y;
+                // Keep current rotation
+            } else if (pivotCommand === 'reset') {
+                // Reset pivot to World Origin (0,0,0) and Identity Rotation
+                newGroupPos.set(0, 0, 0);
+                newGroupQuat.identity();
+                // We keep scale as is (1,1,1 typically)
+            }
+
+            // 3. Calculate NEW Mesh Local Offsets to maintain Visual Position
+            // We need to express `meshWorldPos` and `meshWorldQuat` relative to `newGroupPos` and `newGroupQuat`
+            
+            // Create dummy object to represent the new Group Transform
+            const dummyParent = new THREE.Object3D();
+            dummyParent.position.copy(newGroupPos);
+            dummyParent.quaternion.copy(newGroupQuat);
+            dummyParent.scale.copy(group.scale);
+            dummyParent.updateMatrixWorld();
+
+            // Transform Mesh World -> Local
+            const newLocalPos = dummyParent.worldToLocal(meshWorldPos.clone());
+            
+            // Rotation: Local = InverseParent * World
+            const invParentQuat = dummyParent.quaternion.clone().invert();
+            const newLocalQuat = invParentQuat.multiply(meshWorldQuat);
+            const newLocalEuler = new THREE.Euler().setFromQuaternion(newLocalQuat);
+
+            // 4. Update Store
+            updateObject(selectedId, {
+                position: { x: newGroupPos.x, y: newGroupPos.y, z: newGroupPos.z },
+                rotation: { 
+                    x: new THREE.Euler().setFromQuaternion(newGroupQuat).x,
+                    y: new THREE.Euler().setFromQuaternion(newGroupQuat).y,
+                    z: new THREE.Euler().setFromQuaternion(newGroupQuat).z
+                },
+                geometryOffset: { x: newLocalPos.x, y: newLocalPos.y, z: newLocalPos.z },
+                geometryRotation: { x: newLocalEuler.x, y: newLocalEuler.y, z: newLocalEuler.z }
+            }, true);
+        }
+
+        // Clear command
+        setPivotCommand(null);
+    }
+  }, [pivotCommand, selectedId, activeViewportId, viewportId, scene, updateObject, setPivotCommand]);
 
   // Sync transform controls with store history
   useEffect(() => {
@@ -187,7 +262,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
           object={transformTarget}
           mode={transformMode}
           space={transformSpace}
-          size={0.8}
+          size={gizmoSize}
           onChange={handleTransformChange}
         />
       )}

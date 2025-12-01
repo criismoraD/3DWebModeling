@@ -1,6 +1,7 @@
 export type ViewportType = 'perspective' | 'top' | 'front' | 'side' | 'left';
 export type TransformMode = 'translate' | 'rotate' | 'scale';
 export type TransformSpace = 'local' | 'world';
+export type PivotCommand = 'center' | 'bottom' | 'reset' | null;
 
 export interface Vector3Data {
   x: number;
@@ -31,6 +32,8 @@ export interface AppState {
   transformSpace: TransformSpace;
   gridVisible: boolean;
   isGizmoEditMode: boolean; // "D" key toggle
+  gizmoSize: number; // Size of the transform gizmo
+  pivotCommand: PivotCommand; // Command to manipulate pivot
   history: SceneObject[][]; // Simple undo stack (snapshots of objects array)
   historyIndex: number;
   
@@ -42,6 +45,8 @@ export interface AppState {
   setTransformSpace: (space: TransformSpace) => void;
   toggleGrid: () => void;
   toggleGizmoEditMode: () => void;
+  updateGizmoSize: (delta: number) => void;
+  setPivotCommand: (command: PivotCommand) => void;
   selectObject: (id: string | null) => void;
   updateObject: (id: string, changes: Partial<SceneObject>, recordHistory?: boolean) => void;
   toggleVisibility: (id: string) => void;

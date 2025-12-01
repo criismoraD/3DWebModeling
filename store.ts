@@ -32,6 +32,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   transformSpace: 'local',
   gridVisible: true,
   isGizmoEditMode: false,
+  gizmoSize: 0.8,
+  pivotCommand: null,
   history: [JSON.parse(JSON.stringify(INITIAL_OBJECTS))],
   historyIndex: 0,
 
@@ -50,6 +52,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleGrid: () => set((state) => ({ gridVisible: !state.gridVisible })),
   
   toggleGizmoEditMode: () => set((state) => ({ isGizmoEditMode: !state.isGizmoEditMode })),
+
+  updateGizmoSize: (delta) => set((state) => ({ 
+    gizmoSize: Math.max(0.2, Math.min(5.0, state.gizmoSize + delta)) 
+  })),
+  
+  setPivotCommand: (command) => set({ pivotCommand: command }),
   
   selectObject: (id) => set({ selectedId: id }),
   

@@ -16,7 +16,10 @@ import {
   Globe, 
   BoxSelect, 
   FolderOpen,
-  Anchor
+  Anchor,
+  AlignCenter,
+  ArrowDownToLine,
+  RefreshCcw
 } from 'lucide-react';
 
 const HeaderButton: React.FC<{ 
@@ -163,7 +166,7 @@ const SceneExplorer = () => {
 };
 
 const PropertiesPanel = () => {
-  const { objects, selectedId, updateObject } = useAppStore();
+  const { objects, selectedId, updateObject, setPivotCommand } = useAppStore();
   const selectedObject = objects.find(o => o.id === selectedId);
 
   if (!selectedObject) {
@@ -272,7 +275,39 @@ const PropertiesPanel = () => {
         
         {/* Geometry Offset (Advanced) */}
          <div className="space-y-3 pt-2 border-t border-gray-700/50">
-            <div className="text-[10px] font-bold text-gray-500 uppercase bg-gray-950/50 px-2 py-1 rounded">Pivot Offset (Local)</div>
+            <div className="text-[10px] font-bold text-gray-500 uppercase bg-gray-950/50 px-2 py-1 rounded flex justify-between items-center">
+                <span>Pivot Offset (Local)</span>
+                <span className="text-[9px] text-gray-600">Advanced</span>
+            </div>
+
+             {/* Tools */}
+             <div className="grid grid-cols-3 gap-1 mb-2">
+                 <button 
+                    onClick={() => setPivotCommand('center')}
+                    className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12"
+                    title="Center Pivot to Object"
+                 >
+                    <AlignCenter size={14} />
+                    <span className="text-[9px]">Center</span>
+                 </button>
+                 <button 
+                    onClick={() => setPivotCommand('bottom')}
+                    className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12"
+                    title="Pivot to Bottom Center"
+                 >
+                    <ArrowDownToLine size={14} />
+                    <span className="text-[9px]">Bottom</span>
+                 </button>
+                 <button 
+                    onClick={() => setPivotCommand('reset')}
+                    className="bg-gray-750 hover:bg-gray-700 text-gray-400 hover:text-white p-1 rounded border border-gray-700 flex flex-col items-center justify-center gap-1 h-12"
+                    title="Reset Pivot to World (0,0,0)"
+                 >
+                    <RefreshCcw size={14} />
+                    <span className="text-[9px]">Reset</span>
+                 </button>
+             </div>
+
              <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">Offset Position</label>
                 <div className="flex gap-1">
@@ -364,6 +399,15 @@ export default function App() {
           case 'f': store.setViewportType(store.activeViewportId, 'front'); break;
           case 'l': store.setViewportType(store.activeViewportId, 'left'); break;
           case 'p': store.setViewportType(store.activeViewportId, 'perspective'); break;
+          // Gizmo Size
+          case '+': 
+          case '=':
+            store.updateGizmoSize(0.2); 
+            break;
+          case '-': 
+          case '_':
+            store.updateGizmoSize(-0.2); 
+            break;
         }
       }
     };
@@ -424,6 +468,8 @@ export default function App() {
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">F</kbd> Front</span>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">L</kbd> Left</span>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">P</kbd> Persp</span>
+        <div className="w-px h-3 bg-gray-700 mx-2"></div>
+        <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">+</kbd><kbd className="bg-gray-700 px-1 rounded text-gray-300">-</kbd> Gizmo Size</span>
         <div className="flex-1"></div>
         <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+Z</kbd> Undo</span>
       </div>
