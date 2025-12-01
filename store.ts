@@ -1,6 +1,9 @@
 import { create } from 'zustand';
 import { AppState, SceneObject } from './types';
 
+// Internal Unit = 1 Meter
+// Initial Cube: 10cm x 10cm x 10cm
+// 10cm = 0.1m
 const INITIAL_OBJECTS: SceneObject[] = [
   {
     id: 'cube-1',
@@ -8,7 +11,8 @@ const INITIAL_OBJECTS: SceneObject[] = [
     type: 'mesh',
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
-    scale: { x: 1, y: 1, z: 1 },
+    scale: { x: 1, y: 1, z: 1 }, // Scale is a multiplier (default 1)
+    dimensions: { x: 0.1, y: 0.1, z: 0.1 }, // Actual size: 0.1m (10cm)
     geometryOffset: { x: 0, y: 0, z: 0 },
     geometryRotation: { x: 0, y: 0, z: 0 },
     visible: true,
@@ -32,8 +36,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   transformSpace: 'local',
   gridVisible: true,
   isGizmoEditMode: false,
-  gizmoSize: 0.8,
+  gizmoSize: 0.5, // Smaller default because object is 0.1
   pivotCommand: null,
+  unit: 'cm', // Default unit
   history: [JSON.parse(JSON.stringify(INITIAL_OBJECTS))],
   historyIndex: 0,
 
@@ -54,10 +59,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleGizmoEditMode: () => set((state) => ({ isGizmoEditMode: !state.isGizmoEditMode })),
 
   updateGizmoSize: (delta) => set((state) => ({ 
-    gizmoSize: Math.max(0.2, Math.min(5.0, state.gizmoSize + delta)) 
+    gizmoSize: Math.max(0.1, Math.min(5.0, state.gizmoSize + delta)) 
   })),
   
   setPivotCommand: (command) => set({ pivotCommand: command }),
+
+  setUnit: (unit) => set({ unit }),
   
   selectObject: (id) => set({ selectedId: id }),
   

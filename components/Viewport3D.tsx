@@ -22,6 +22,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
     isGizmoEditMode,
     gizmoSize,
     pivotCommand,
+    unit,
     updateObject,
     selectObject,
     setPivotCommand,
@@ -207,6 +208,28 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
     }
   };
 
+  // Grid Configuration based on Unit
+  // Base unit = Meter
+  const getGridConfig = () => {
+    switch (unit) {
+      case 'm': 
+        return { cell: 1, section: 10 }; // Cell 1m, Section 10m
+      case 'cm':
+        // User wants 1cm lines to be the "white" lines (cell). 1cm = 0.01m
+        return { cell: 0.01, section: 0.1 }; // Cell 1cm, Section 10cm
+      case 'mm':
+        // User wants 1mm lines. 1mm = 0.001m
+        return { cell: 0.001, section: 0.01 }; // Cell 1mm, Section 10mm
+      case 'in':
+        // 1 inch = 0.0254m
+        return { cell: 0.0254, section: 0.3048 }; // Cell 1in, Section 1ft
+      default:
+        return { cell: 1, section: 10 };
+    }
+  };
+
+  const gridConfig = getGridConfig();
+
   return (
     <>
       <ambientLight intensity={0.5} />
@@ -217,8 +240,10 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
           infiniteGrid 
           fadeDistance={50} 
           sectionColor="#4a4a4a" 
-          cellColor="#2a2a2a" 
-          position={[0, -0.01, 0]}
+          cellColor="#555555" // Lightened cell color for better visibility of the "measure"
+          position={[0, -0.001, 0]}
+          cellSize={gridConfig.cell}
+          sectionSize={gridConfig.section}
         />
       )}
 
@@ -244,13 +269,17 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
                     obj.geometryRotation ? obj.geometryRotation.z : 0
                 ]}
             >
-                <boxGeometry args={[2, 2, 2]} />
+                <boxGeometry args={[
+                    obj.dimensions ? obj.dimensions.x : 1,
+                    obj.dimensions ? obj.dimensions.y : 1,
+                    obj.dimensions ? obj.dimensions.z : 1
+                ]} />
                 <meshNormalMaterial />
             </mesh>
             
             {/* Visual Pivot Helper (Tiny Axis) */}
             {selectedId === obj.id && (
-                <axesHelper args={[1.5]} />
+                <axesHelper args={[gizmoSize * 1.5]} />
             )}
         </group>
       ))}
@@ -275,12 +304,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
   const isActive = activeViewportId === id;
 
   const getCameraProps = () => {
+    // Adjusted zoom for smaller default objects (10cm = 0.1)
     switch (type) {
-      case 'top': return { position: [0, 20, 0] as [number, number, number], up: [0, 0, -1] as [number, number, number], zoom: 40 };
-      case 'front': return { position: [0, 0, 20] as [number, number, number], zoom: 40 };
-      case 'side': return { position: [20, 0, 0] as [number, number, number], zoom: 40 }; // Right
-      case 'left': return { position: [-20, 0, 0] as [number, number, number], zoom: 40 }; // Left
-      default: return { position: [10, 10, 10] as [number, number, number], fov: 50 };
+      case 'top': return { position: [0, 0.5, 0] as [number, number, number], up: [0, 0, -1] as [number, number, number], zoom: 500 };
+      case 'front': return { position: [0, 0, 0.5] as [number, number, number], zoom: 500 };
+      case 'side': return { position: [0.5, 0, 0] as [number, number, number], zoom: 500 }; // Right
+      case 'left': return { position: [-0.5, 0, 0] as [number, number, number], zoom: 500 }; // Left
+      default: return { position: [0.3, 0.3, 0.3] as [number, number, number], fov: 50 };
     }
   };
 
