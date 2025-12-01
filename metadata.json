@@ -1,0 +1,5 @@
+{
+  "name": "PolyView 3D Editor",
+  "description": "A professional-grade 3D viewport editor with multi-view support, scene graph, and property inspection using React Three Fiber.",
+  "requestFramePermissions": []
+}

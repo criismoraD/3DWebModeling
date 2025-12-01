@@ -1,0 +1,242 @@
+import React, { useRef, useEffect, useState } from 'react';
+import { Canvas, useThree } from '@react-three/fiber';
+import { OrbitControls, Grid, TransformControls, PerspectiveCamera, OrthographicCamera } from '@react-three/drei';
+import * as THREE from 'three';
+import { useAppStore } from '../store';
+import { ViewportType, SceneObject } from '../types';
+
+interface Viewport3DProps {
+  id: number;
+  type: ViewportType;
+  label: string;
+}
+
+const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ viewportId, type }) => {
+  const { 
+    objects, 
+    selectedId, 
+    transformMode, 
+    transformSpace, 
+    gridVisible, 
+    activeViewportId, 
+    isGizmoEditMode,
+    updateObject,
+    selectObject,
+    recordHistory
+  } = useAppStore();
+
+  const { scene } = useThree();
+  const selectedObject = objects.find(o => o.id === selectedId);
+  const transformRef = useRef<any>(null);
+  const [transformTarget, setTransformTarget] = useState<THREE.Object3D | undefined>(undefined);
+  
+  // Ref to store the initial WORLD state of the geometry before a drag starts
+  const geometryWorldState = useRef<{ pos: THREE.Vector3, quat: THREE.Quaternion } | null>(null);
+
+  // Update transform target when selection changes or objects update
+  useEffect(() => {
+    if (selectedId) {
+      // Find the actual THREE.Object3D in the scene graph (The Group)
+      const obj = scene.getObjectByName(selectedId);
+      setTransformTarget(obj);
+    } else {
+      setTransformTarget(undefined);
+    }
+  }, [selectedId, scene, objects]);
+
+  // Sync transform controls with store history
+  useEffect(() => {
+    if (transformRef.current) {
+      const controls = transformRef.current;
+      
+      const callback = (event: any) => {
+         const dragging = event.value;
+         
+         if (dragging && selectedObject && transformTarget) {
+            // DRAG STARTED
+            // If in Gizmo Edit mode, we need to snapshot the exact world position of the visual mesh
+            // so we can keep it there while the pivot moves.
+            const group = transformTarget;
+            // The mesh is the first child of the group
+            const mesh = group.children[0];
+            
+            if (mesh) {
+                const worldPos = new THREE.Vector3();
+                const worldQuat = new THREE.Quaternion();
+                mesh.getWorldPosition(worldPos);
+                mesh.getWorldQuaternion(worldQuat);
+                geometryWorldState.current = { pos: worldPos, quat: worldQuat };
+            }
+         } else if (!dragging && selectedObject) {
+           // DRAG ENDED
+           geometryWorldState.current = null;
+           recordHistory();
+         }
+      };
+      
+      controls.addEventListener('dragging-changed', callback);
+      return () => controls.removeEventListener('dragging-changed', callback);
+    }
+  }, [recordHistory, selectedObject, transformTarget]);
+
+  const handleTransformChange = () => {
+    // Check if controls and object exist before accessing
+    if (transformRef.current && transformRef.current.object && selectedObject) {
+      const group = transformRef.current.object;
+      
+      // Calculate changes
+      const changes: Partial<SceneObject> = {
+        position: { x: group.position.x, y: group.position.y, z: group.position.z },
+        rotation: { x: group.rotation.x, y: group.rotation.y, z: group.rotation.z },
+        scale: { x: group.scale.x, y: group.scale.y, z: group.scale.z }
+      };
+
+      // GIZMO EDIT MODE (Pivot Editing)
+      // Logic: If we move/rotate the group (pivot), we must move/rotate the geometry (child) inversely
+      // so that the geometry appears static in world space.
+      if (isGizmoEditMode && geometryWorldState.current) {
+         // Get where the mesh SHOULD be in world space
+         const desiredWorldPos = geometryWorldState.current.pos.clone();
+         const desiredWorldQuat = geometryWorldState.current.quat.clone();
+         
+         // Convert that World position/rotation to Local space relative to the NEW group transform
+         const newLocalPos = group.worldToLocal(desiredWorldPos);
+         
+         // Inverse of Group Quat * Desired World Quat = New Local Quat
+         const invGroupQuat = group.quaternion.clone().invert();
+         const newLocalQuat = invGroupQuat.multiply(desiredWorldQuat);
+         const newLocalEuler = new THREE.Euler().setFromQuaternion(newLocalQuat);
+
+         // CRITICAL: Apply directly to the mesh object to prevent frame-lag vibration
+         const mesh = group.children[0] as THREE.Mesh;
+         if (mesh) {
+             mesh.position.copy(newLocalPos);
+             mesh.quaternion.copy(newLocalQuat);
+         }
+
+         // Update state
+         changes.geometryOffset = { 
+             x: newLocalPos.x, 
+             y: newLocalPos.y, 
+             z: newLocalPos.z 
+         };
+         
+         changes.geometryRotation = {
+             x: newLocalEuler.x,
+             y: newLocalEuler.y,
+             z: newLocalEuler.z
+         };
+      }
+
+      updateObject(selectedObject.id, changes, false); // Don't record history on every frame
+    }
+  };
+
+  return (
+    <>
+      <ambientLight intensity={0.5} />
+      <directionalLight position={[10, 10, 10]} intensity={1} />
+      
+      {gridVisible && (
+        <Grid 
+          infiniteGrid 
+          fadeDistance={50} 
+          sectionColor="#4a4a4a" 
+          cellColor="#2a2a2a" 
+          position={[0, -0.01, 0]}
+        />
+      )}
+
+      {objects.map((obj) => (
+        <group
+            key={obj.id}
+            name={obj.id} // The Group is the "Selectable" entity (Pivot)
+            position={[obj.position.x, obj.position.y, obj.position.z]}
+            rotation={[obj.rotation.x, obj.rotation.y, obj.rotation.z]}
+            scale={[obj.scale.x, obj.scale.y, obj.scale.z]}
+            visible={obj.visible}
+            onClick={(e) => {
+                e.stopPropagation();
+                selectObject(obj.id);
+            }}
+        >
+            {/* The Mesh is the visual geometry, offset from the pivot */}
+            <mesh
+                position={[obj.geometryOffset.x, obj.geometryOffset.y, obj.geometryOffset.z]}
+                rotation={[
+                    obj.geometryRotation ? obj.geometryRotation.x : 0, 
+                    obj.geometryRotation ? obj.geometryRotation.y : 0, 
+                    obj.geometryRotation ? obj.geometryRotation.z : 0
+                ]}
+            >
+                <boxGeometry args={[2, 2, 2]} />
+                <meshNormalMaterial />
+            </mesh>
+            
+            {/* Visual Pivot Helper (Tiny Axis) */}
+            {selectedId === obj.id && (
+                <axesHelper args={[1.5]} />
+            )}
+        </group>
+      ))}
+
+      {/* Only show transform controls if this is the active viewport, object is selected, and target is found */}
+      {selectedId && selectedObject && selectedObject.visible && activeViewportId === viewportId && transformTarget && (
+        <TransformControls
+          ref={transformRef}
+          object={transformTarget}
+          mode={transformMode}
+          space={transformSpace}
+          size={0.8}
+          onChange={handleTransformChange}
+        />
+      )}
+    </>
+  );
+};
+
+export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
+  const { activeViewportId, setActiveViewport } = useAppStore();
+  const isActive = activeViewportId === id;
+
+  const getCameraProps = () => {
+    switch (type) {
+      case 'top': return { position: [0, 20, 0] as [number, number, number], up: [0, 0, -1] as [number, number, number], zoom: 40 };
+      case 'front': return { position: [0, 0, 20] as [number, number, number], zoom: 40 };
+      case 'side': return { position: [20, 0, 0] as [number, number, number], zoom: 40 }; // Right
+      case 'left': return { position: [-20, 0, 0] as [number, number, number], zoom: 40 }; // Left
+      default: return { position: [10, 10, 10] as [number, number, number], fov: 50 };
+    }
+  };
+
+  const camProps = getCameraProps();
+  const isOrtho = type !== 'perspective';
+
+  return (
+    <div 
+      className={`relative w-full h-full border ${isActive ? 'border-accent-500 border-2' : 'border-gray-700'}`}
+      onMouseDown={() => setActiveViewport(id)}
+    >
+      <div className="absolute top-2 left-2 z-10 px-2 py-0.5 bg-black/60 text-gray-300 text-xs rounded uppercase font-medium pointer-events-none">
+        {label}
+      </div>
+      
+      <Canvas className="w-full h-full bg-[#1a1a1a]">
+        {isOrtho ? (
+          <OrthographicCamera makeDefault position={camProps.position} up={camProps.up} zoom={camProps.zoom} />
+        ) : (
+          <PerspectiveCamera makeDefault position={camProps.position} fov={50} />
+        )}
+        
+        <OrbitControls 
+          makeDefault 
+          enableRotate={!isOrtho} // Disable rotation for ortho views to keep them aligned
+          enableDamping 
+          dampingFactor={0.1}
+        />
+        
+        <SceneContent viewportId={id} type={type} />
+      </Canvas>
+    </div>
+  );
+};
