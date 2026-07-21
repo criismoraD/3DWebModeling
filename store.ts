@@ -17,7 +17,8 @@ const INITIAL_OBJECTS: SceneObject[] = [
     geometryOffset: { x: 0, y: 0, z: 0 },
     geometryRotation: { x: 0, y: 0, z: 0 },
     visible: true,
-    geometry: 'box'
+    geometry: 'box',
+    color: '#4a90d9'
   }
 ];
 
@@ -209,6 +210,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  duplicateSelected: () => {
+    const { selectedIds, objects, history, historyIndex } = get();
+    if (selectedIds.length === 0) return;
+    const selected = objects.filter(obj => selectedIds.includes(obj.id));
+    const duplicates = selected.map((obj, index) => ({
+      ...JSON.parse(JSON.stringify(obj)),
+      id: `${obj.geometry || 'obj'}-${crypto.randomUUID()}`,
+      name: `${obj.name}_copy`,
+      position: { ...obj.position, x: obj.position.x + 0.1, z: obj.position.z + 0.1 }
+    }));
+    const nextObjects = [...objects, ...duplicates];
+    const nextHistory = history.slice(0, historyIndex + 1);
+    nextHistory.push(JSON.parse(JSON.stringify(nextObjects)));
+    set({ objects: nextObjects, selectedIds: duplicates.map(obj => obj.id), history: nextHistory, historyIndex: nextHistory.length - 1 });
+  },
+
   copy: () => {
     const { selectedIds, objects } = get();
     if (selectedIds.length === 0) return;
@@ -376,7 +393,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         dimensions: { x: 0.01, y: 0.01, z: 0.01 },
         radius: 0.01,
         geometryOffset: { x: 0, y: 0, z: 0 },
-        geometryRotation: { x: 0, y: 0, z: 0 }
+        geometryRotation: { x: 0, y: 0, z: 0 },
+        color: '#4a90d9'
       };
       
       set({ 
@@ -451,5 +469,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { recordHistory } = get();
       recordHistory();
       set({ drawingPhase: 'idle', drawingStartPoint: null, interactionMode: 'select' });
+  },
+
+  cancelDrawing: () => {
+      const { drawingPhase, selectedIds, objects } = get();
+      if (drawingPhase === 'idle') return;
+      const nextObjects = objects.filter(obj => !selectedIds.includes(obj.id));
+      set({ objects: nextObjects, selectedIds: [], drawingPhase: 'idle', drawingStartPoint: null, interactionMode: 'select' });
   }
 }));

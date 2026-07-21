@@ -504,6 +504,16 @@ const PropertiesPanel = () => {
                     onChange={(e) => updateObject(selectedObject.id, { visible: e.target.checked })}
                 />
             </div>
+            <div className="flex items-center gap-2 text-xs">
+                <label className="w-16 text-gray-500">Color</label>
+                <input
+                    type="color"
+                    value={selectedObject.color || '#4a90d9'}
+                    onChange={(e) => updateObject(selectedObject.id, { color: e.target.value })}
+                    className="h-6 w-10 bg-transparent border border-gray-600 rounded cursor-pointer"
+                />
+                <span className="text-[10px] text-gray-500 uppercase">{selectedObject.color || '#4a90d9'}</span>
+            </div>
         </div>
 
         {/* Transform Group */}
@@ -623,7 +633,8 @@ export default function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't trigger shortcuts when typing in inputs
-      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable) return;
 
       const key = e.key.toLowerCase();
       const isCtrl = e.ctrlKey || e.metaKey; // Support Cmd on Mac
@@ -640,11 +651,22 @@ export default function App() {
       } else if (isCtrl && key === 'v') {
         e.preventDefault();
         store.setRequestPaste(true); // Trigger paste request instead of direct paste
-      } else if (e.key === 'Delete') {
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         store.deleteSelected();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        if (store.drawingPhase !== 'idle') store.cancelDrawing();
+        else store.setInteractionMode('select');
+      } else if (isCtrl && key === 'd') {
+        e.preventDefault();
+        store.duplicateSelected();
       } else {
         switch(key) {
+          case 'a':
+            if (e.altKey) store.deselectAll();
+            else store.selectAll();
+            break;
           case 'g': store.toggleGrid(); break;
           case 'w': store.setTransformMode('translate'); break;
           case 'e': store.setTransformMode('rotate'); break;
@@ -724,6 +746,8 @@ export default function App() {
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">RMB</kbd> Orbit</span>
             <div className="w-px h-3 bg-gray-700 mx-1"></div>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">W/E/R</kbd> Transform</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+D</kbd> Duplicate</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Esc</kbd> Cancel</span>
         </div>
         
         {/* Coordinate Input Bar */}
