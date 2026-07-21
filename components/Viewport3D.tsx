@@ -709,7 +709,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
                     ]}
                 >
                     {renderGeometry(obj)}
-                    <meshNormalMaterial wireframe={false} />
+                    <meshStandardMaterial color={obj.color || '#4a90d9'} roughness={0.72} metalness={0.08} />
                 </mesh>
                 
                 {isSelected && interactionMode === 'select' && (
@@ -942,6 +942,8 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
           }}
         />
         
+        <ambientLight intensity={0.7} />
+        <directionalLight position={[4, 6, 3]} intensity={1.3} />
         <SceneContent viewportId={id} type={type} />
       </Canvas>
     </div>

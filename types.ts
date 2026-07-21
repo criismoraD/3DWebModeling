@@ -34,6 +34,7 @@ export interface SceneObject {
   geometryRotation: Vector3Data; // Offset of the mesh rotation relative to the pivot
   visible: boolean;
   geometry?: string;
+  color: string;
 }
 
 export interface AppState {
@@ -103,4 +104,6 @@ export interface AppState {
   updateDrawing: (pos: Vector3Data) => void;
   stopDrawingBase: () => void; // Transition base -> height (Mouse Up)
   finishDrawing: () => void; // Finish creation (Click)
+  cancelDrawing: () => void;
+  duplicateSelected: () => void;
 }
