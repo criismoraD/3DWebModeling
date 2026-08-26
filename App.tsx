@@ -1154,6 +1154,9 @@ export default function App() {
                 : ` ${((store.modalReadout.amount * getUnitFactor(store.unit)) | 0) / 1000} ${store.unit}`
               : ''}
             {store.modalReadout?.snapped ? ' · SNAPPED' : ''}
+            {store.snapTarget && store.snapTarget.objectId && store.snapTarget.objectId !== store.editObjectId
+              ? ` → ${store.objects.find(o => o.id === store.snapTarget!.objectId)?.name ?? 'otro objeto'} · Ctrl+J para unir y soldar`
+              : ''}
           </div>
         )}
         

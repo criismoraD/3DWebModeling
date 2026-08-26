@@ -327,15 +327,22 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       if (hit && hit.kind === 'vertex') selectLinked(hit.key);
     };
 
+    const onLeave = () => {
+      if (hoverElement) setHoverElement(null);
+      element.style.cursor = 'auto';
+    };
+
     element.addEventListener('pointermove', onMove);
     element.addEventListener('pointerdown', onDown);
     window.addEventListener('pointerup', onUp);
     element.addEventListener('dblclick', onDoubleClick);
+    element.addEventListener('pointerleave', onLeave);
     return () => {
       element.removeEventListener('pointermove', onMove);
       element.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointerup', onUp);
       element.removeEventListener('dblclick', onDoubleClick);
+      element.removeEventListener('pointerleave', onLeave);
       element.style.cursor = 'auto';
     };
   });
