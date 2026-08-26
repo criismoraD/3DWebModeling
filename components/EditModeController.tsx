@@ -86,6 +86,8 @@ interface DragState {
   center: THREE.Vector3 | null; // world space pivot for rotate/scale
   snapped: boolean;
   moved: boolean;
+  /** constraint in force during the drag (null = free) */
+  axisMask: AxisMask;
 }
 
 export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportId }) => {
@@ -439,6 +441,7 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       center: selectionMedian ? selectionMedian.clone() : null,
       snapped: false,
       moved: false,
+      axisMask: null,
     };
     setSnapSourceVertex(sourceVertex);
   };
@@ -537,8 +540,10 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
 
     // rotate/scale gizmos must not be translated by the snap
     const isTranslate = useAppStore.getState().transformMode === 'translate';
+    const mask = isTranslate ? maskFromGizmoAxis(transformRef.current?.axis) : null;
+    state.axisMask = mask;
     const { shift, target } = isTranslate
-      ? computeSnapShift(movedWorld, state.sourceVertex, maskFromGizmoAxis(transformRef.current?.axis))
+      ? computeSnapShift(movedWorld, state.sourceVertex, mask)
       : { shift: new THREE.Vector3(), target: null };
     setSnapTarget(target);
     state.snapped = !!target;
@@ -550,27 +555,34 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
     applyPositions(result, false);
   };
 
+  /**
+   * Welds the snapped source vertex into its target. Returns true when a merge
+   * happened, so the caller can skip the plain position commit.
+   */
+  const weldOnDrop = (state: DragState): boolean => {
+    const current = useAppStore.getState();
+    const target = current.snapTarget;
+    if (!target || target.kind !== 'vertex' || !current.snapSettings.weld) return false;
+    if (target.objectId !== editObjectId) return false; // join the objects first
+    if (state.sourceVertex === null || target.vertexIndex === null) return false;
+    if (state.startIndex.includes(target.vertexIndex)) return false;
+    // a locked axis must win over the weld: merging would move the frozen axes
+    if (state.axisMask || (current.modalTransform && current.modalTransform.axis !== 'free')) return false;
+
+    const localTarget = toLocal(toVec3(target.point));
+    current.setEditSelection({ vertices: [state.sourceVertex, target.vertexIndex] });
+    runEditOp({ type: 'merge', mode: 'cursor', cursor: { x: localTarget.x, y: localTarget.y, z: localTarget.z } }, true);
+    return true;
+  };
+
   /** Releases the gizmo: welds onto the snap target, or commits with history. */
   const endGizmoDrag = () => {
     const state = finishDrag();
     if (!state || !state.moved) return;
 
+    if (weldOnDrop(state)) return;
+
     const current = useAppStore.getState();
-    const target = current.snapTarget;
-    if (
-      target &&
-      target.kind === 'vertex' &&
-      current.snapSettings.weld &&
-      target.objectId === editObjectId &&
-      state.sourceVertex !== null &&
-      target.vertexIndex !== null &&
-      !state.startIndex.includes(target.vertexIndex)
-    ) {
-      const localTarget = toLocal(toVec3(target.point));
-      current.setEditSelection({ vertices: [state.sourceVertex, target.vertexIndex] });
-      runEditOp({ type: 'merge', mode: 'cursor', cursor: { x: localTarget.x, y: localTarget.y, z: localTarget.z } }, true);
-      return;
-    }
 
     const payload: Record<number, Vector3Data> = {};
     const liveMesh = current.objects.find(o => o.id === editObjectId)?.mesh;
@@ -670,6 +682,7 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
     beginDrag(source, null, new THREE.Vector2(pointerPx.current.x, pointerPx.current.y));
     if (drag.current) {
       drag.current.startPlanePoint = planeIntersect(pointerPx.current.x, pointerPx.current.y, drag.current.center);
+      drag.current.axisMask = maskFromLock(modalTransform.axis);
     }
   };
 
@@ -759,6 +772,7 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       setModalTransform(null);
       return;
     }
+    const welded = weldOnDrop(state);
     const payload: Record<number, Vector3Data> = {};
     const live = useAppStore.getState().objects.find(o => o.id === editObjectId)?.mesh;
     state.originals.forEach((_, i) => {
@@ -769,7 +783,8 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
     setSnapSourceVertex(null);
     setSnapTarget(null);
     setModalTransform(null);
-    if (Object.keys(payload).length > 0) runEditOp({ type: 'set-vertices', positions: payload }, true);
+    // the merge already recorded the moved positions, do not commit them twice
+    if (!welded && Object.keys(payload).length > 0) runEditOp({ type: 'set-vertices', positions: payload }, true);
   };
 
   const cancelModal = () => {
