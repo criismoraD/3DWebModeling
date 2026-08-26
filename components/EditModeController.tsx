@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { useAppStore } from '../store';
 import type { AxisLock, ModalTransform, SceneObject, SnapTarget, Vector3Data } from '../types';
 import { getRenderData } from './EditableMesh';
-import { applyMask, maskFromGizmoAxis, maskFromLock } from './axisConstraint';
+import { applyMask, isConstrained, maskFromGizmoAxis, maskFromLock } from './axisConstraint';
 import type { AxisMask } from './axisConstraint';
 import {
   activeVertexIndices,
@@ -566,8 +566,10 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
     if (target.objectId !== editObjectId) return false; // join the objects first
     if (state.sourceVertex === null || target.vertexIndex === null) return false;
     if (state.startIndex.includes(target.vertexIndex)) return false;
-    // a locked axis must win over the weld: merging would move the frozen axes
-    if (state.axisMask || (current.modalTransform && current.modalTransform.axis !== 'free')) return false;
+    // a locked axis must win over the weld: merging would move the frozen axes.
+    // Selecting all gizmo axes constrains nothing, so it still welds.
+    if (isConstrained(state.axisMask)) return false;
+    if (current.modalTransform && current.modalTransform.axis !== 'free') return false;
 
     const localTarget = toLocal(toVec3(target.point));
     current.setEditSelection({ vertices: [state.sourceVertex, target.vertexIndex] });

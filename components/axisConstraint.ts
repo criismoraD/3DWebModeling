@@ -42,6 +42,16 @@ export function applyMask<T extends XYZ>(v: T, mask: AxisMask): XYZ {
   };
 }
 
+/**
+ * True when the constraint actually freezes at least one axis.
+ * Selecting every gizmo axis (the centre ball, 'XYZ') constrains nothing, so it
+ * must not be treated as a lock.
+ */
+export function isConstrained(mask: AxisMask): boolean {
+  if (!mask) return false;
+  return !(mask.x && mask.y && mask.z);
+}
+
 /** Human readable label of a constraint, for the status bar. */
 export function maskLabel(mask: AxisMask): string {
   if (!mask) return 'FREE';

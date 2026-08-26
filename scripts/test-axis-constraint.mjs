@@ -66,6 +66,19 @@ test('free move keeps the whole snap shift', () => {
   assert.deepEqual(A.applyMask(shift, null), shift);
 });
 
+test('selecting every gizmo axis constrains nothing', () => {
+  assert.equal(A.isConstrained(A.maskFromGizmoAxis('XYZ')), false, 'the centre ball must not count as a lock');
+  assert.equal(A.isConstrained(null), false);
+  assert.equal(A.isConstrained(A.maskFromLock('free')), false);
+});
+
+test('a single axis or a plane constraint does freeze an axis', () => {
+  assert.equal(A.isConstrained(A.maskFromLock('x')), true);
+  assert.equal(A.isConstrained(A.maskFromGizmoAxis('Y')), true);
+  assert.equal(A.isConstrained(A.maskFromGizmoAxis('XY')), true);
+  assert.equal(A.isConstrained(A.maskFromGizmoAxis('XZ')), true);
+});
+
 test('maskLabel describes the constraint for the status bar', () => {
   assert.equal(A.maskLabel(A.maskFromLock('x')), 'X');
   assert.equal(A.maskLabel(A.maskFromGizmoAxis('XZ')), 'XZ');
