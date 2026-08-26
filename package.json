@@ -9,9 +9,10 @@
     "preview": "vite preview",
     "test:geometry": "tsc editGeometry.ts types.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-geometry.mjs",
     "test:store": "tsc store.ts editGeometry.ts types.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-store.mjs",
-    "test": "npm run test:geometry && npm run test:axis && npm run test:picking && npm run test:store",
+    "test": "npm run test:geometry && npm run test:axis && npm run test:picking && npm run test:store && npm run test:workflow",
     "test:axis": "tsc editGeometry.ts types.ts components/axisConstraint.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-axis-constraint.mjs",
-    "test:picking": "tsc editGeometry.ts types.ts components/snapping.ts components/editPicking.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-picking.mjs"
+    "test:picking": "tsc editGeometry.ts types.ts components/snapping.ts components/editPicking.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-picking.mjs",
+    "test:workflow": "tsc store.ts editGeometry.ts types.ts components/snapping.ts components/axisConstraint.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-snap-workflow.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

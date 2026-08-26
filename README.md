@@ -105,15 +105,22 @@ click (height/radius). Any of them can be converted into an editable mesh with `
 
 ```bash
 npm run test:geometry   # 24 tests on the mesh kernel
-npm run test:axis       # 10 tests on the axis constraint used by snapping
+npm run test:axis       # 13 tests on the axis constraint used by snapping
 npm run test:picking    # 15 tests on click -> element picking, with real three.js cameras
 npm run test:store      # 15 tests driving the real store through the modelling workflows
+npm run test:workflow   #  8 tests for the snap-a-vertex-onto-another-object workflow
 ```
 
-`npm test` runs all four (64 assertions groups). The picking suite builds real
-perspective and orthographic cameras in Node — no WebGL — and covers the cases that are easy
-to get wrong by eye: elements that overlap on screen resolve to the one closest to the camera,
-so a cube seen from a corner gives you the visible corner and not the hidden one behind it.
+`npm test` runs all five (75 groups).
+
+The picking suite builds real perspective and orthographic cameras in Node — no WebGL — and
+covers what is easy to get wrong by eye: elements that overlap on screen resolve to the one
+closest to the camera, so a cube seen from a corner gives you the visible corner and not the
+hidden one behind it.
+
+`test:workflow` reproduces the reported case end to end: edit cube A, grab a vertex, snap it
+onto a vertex of cube B with every axis free and then locked to X, and assert that the locked
+axes keep their exact value while X lands on the target.
 
 They compile the real `editGeometry.ts` / `store.ts` with `tsc` into `.tmp-test/` and run them
 in Node, so the assertions exercise the shipped code paths (conversion, extrude, snap-weld,
