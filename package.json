@@ -6,16 +6,19 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:geometry": "tsc editGeometry.ts types.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-geometry.mjs",
+    "test:store": "tsc store.ts editGeometry.ts types.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-store.mjs",
+    "test": "npm run test:geometry && npm run test:store"
   },
   "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.4.2",
+    "lucide-react": "^0.555.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "lucide-react": "^0.555.0",
-    "@react-three/fiber": "^9.4.2",
-    "@react-three/drei": "^10.7.7",
-    "zustand": "^5.0.9",
-    "three": "^0.181.2"
+    "three": "^0.181.2",
+    "zustand": "^5.0.9"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

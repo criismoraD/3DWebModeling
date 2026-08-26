@@ -5,6 +5,9 @@ import { OrbitControls, Grid, TransformControls, PerspectiveCamera, Orthographic
 import * as THREE from 'three';
 import { useAppStore } from '../store';
 import { ViewportType, SceneObject } from '../types';
+import { MeshSurface, EditOverlays } from './EditableMesh';
+import { EditModeController } from './EditModeController';
+import { gatherSnapCandidates, findNearestCandidate } from './snapping';
 
 interface Viewport3DProps {
   id: number;
@@ -136,6 +139,11 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
     unit,
     pasteRequest,
     interactionMode,
+    editorMode,
+    editObjectId,
+    editSelection,
+    subObjectMode,
+    hoverElement,
     updateObject,
     updateMultipleObjects,
     selectObject,
@@ -145,7 +153,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
     setIsTransforming
   } = useAppStore();
 
-  const { scene, raycaster, pointer, camera } = useThree();
+  const { scene, raycaster, pointer, camera, size } = useThree();
   
   // Transform Controls Logic
   const primarySelectedId = selectedIds[selectedIds.length - 1]; // Last selected is primary
@@ -170,6 +178,8 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
   const snapOffset = useRef<THREE.Vector3 | null>(null);
 
   const isGridVisible = viewportGridStates[viewportId];
+  const isEditing = editorMode === 'edit';
+  const editObject = objects.find(o => o.id === editObjectId) || null;
 
   const getGridConfig = () => {
     switch (unit) {
@@ -297,64 +307,38 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
   }, [pivotCommand, primarySelectedId, activeViewportId, viewportId, scene, updateObject, setPivotCommand]);
 
   // --- SOURCE VERTEX HOVER SYSTEM (INTERACTIVE) ---
+  // Screen space picking: hover a vertex of the selection, that vertex becomes
+  // the snap source ("grab this corner and drop it on another one").
   useFrame((state) => {
-    if (isDragging.current || 
-        !snapSettings.enabled || 
-        !snapSettings.vertex || 
-        transformMode !== 'translate' || 
-        selectedIds.length === 0 || 
-        isGizmoEditMode // Don't hover source vertex in gizmo edit mode (Source is pivot)
+    if (isEditing ||
+        isDragging.current ||
+        !snapSettings.enabled ||
+        (!snapSettings.vertex && !snapSettings.midpoint) ||
+        transformMode !== 'translate' ||
+        selectedIds.length === 0 ||
+        isGizmoEditMode
     ) {
         if (hoveredSourceVertex) setHoveredSourceVertex(null);
         return;
     }
 
-    // Raycast to find closest vertex on selected objects
-    state.raycaster.setFromCamera(state.pointer, state.camera);
-    
-    // Gather selected meshes
-    const selectedMeshes: THREE.Object3D[] = [];
-    selectedIds.forEach(id => {
-        const obj = scene.getObjectByName(id);
-        if (obj) {
-            obj.traverse(child => {
-                if ((child as THREE.Mesh).isMesh) selectedMeshes.push(child);
-            });
-        }
-    });
+    const px = (state.pointer.x * 0.5 + 0.5) * state.size.width;
+    const py = (-state.pointer.y * 0.5 + 0.5) * state.size.height;
 
-    const intersects = state.raycaster.intersectObjects(selectedMeshes, false);
-    if (intersects.length > 0) {
-        const hit = intersects[0];
-        const mesh = hit.object as THREE.Mesh;
-        
-        if (mesh.geometry) {
-             const posAttr = mesh.geometry.attributes.position;
-             const vertex = new THREE.Vector3();
-             let closestDist = Infinity;
-             let closestVert = new THREE.Vector3();
+    const candidates = gatherSnapCandidates(
+        objects.filter(o => selectedIds.includes(o.id)),
+        { midpoints: snapSettings.midpoint }
+    );
+    const allowed = candidates.filter(c =>
+        (c.kind === 'vertex' && snapSettings.vertex) || (c.kind === 'midpoint' && snapSettings.midpoint)
+    );
+    const hit = findNearestCandidate(allowed, state.camera, state.size.width, state.size.height, px, py, snapSettings.radiusPx);
 
-             // Optimization: Only check vertices reasonably close? 
-             // For now iterate all (ok for simple primitives)
-             for (let i = 0; i < posAttr.count; i++) {
-                 vertex.fromBufferAttribute(posAttr, i);
-                 vertex.applyMatrix4(mesh.matrixWorld);
-                 const dist = hit.point.distanceTo(vertex);
-                 if (dist < closestDist) {
-                     closestDist = dist;
-                     closestVert.copy(vertex);
-                 }
-             }
-             
-             // Threshold for visual feedback
-             if (closestDist < 0.5) {
-                setHoveredSourceVertex(closestVert);
-                return;
-             }
-        }
+    if (hit) {
+        setHoveredSourceVertex(hit.candidate.point.clone());
+    } else if (hoveredSourceVertex) {
+        setHoveredSourceVertex(null);
     }
-    
-    if (hoveredSourceVertex) setHoveredSourceVertex(null);
   });
 
   // Transform Controls Event Handlers
@@ -481,33 +465,15 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
                   sourcePos.add(snapOffset.current);
               }
               
-              let closestDist = snapSettings.threshold;
-              let targetVertex: THREE.Vector3 | null = null;
+              const pointerPx = (pointer.x * 0.5 + 0.5) * size.width;
+              const pointerPy = (-pointer.y * 0.5 + 0.5) * size.height;
+              const candidates = gatherSnapCandidates(
+                  isGizmoEditMode ? objects : objects.filter(o => !selectedIds.includes(o.id)),
+                  { midpoints: snapSettings.midpoint }
+              ).filter(c => (c.kind === 'vertex' && snapSettings.vertex) || (c.kind === 'midpoint' && snapSettings.midpoint));
 
-              objects.forEach(obj => {
-                  // In Normal Mode: Don't snap to self.
-                  // In Gizmo Edit Mode: Allow snap to self (to place pivot on corner)
-                  if (!isGizmoEditMode && selectedIds.includes(obj.id)) return;
-                  
-                  const threeObj = scene.getObjectByName(obj.id);
-                  if (threeObj) {
-                      const mesh = threeObj.children[0] as THREE.Mesh;
-                      if (mesh && mesh.geometry) {
-                          const positionAttribute = mesh.geometry.attributes.position;
-                          const vertex = new THREE.Vector3();
-                          for (let i = 0; i < positionAttribute.count; i++) {
-                              vertex.fromBufferAttribute(positionAttribute, i);
-                              vertex.applyMatrix4(mesh.matrixWorld);
-                              
-                              const dist = sourcePos.distanceTo(vertex);
-                              if (dist < closestDist) {
-                                  closestDist = dist;
-                                  targetVertex = vertex.clone();
-                              }
-                          }
-                      }
-                  }
-              });
+              const hit = findNearestCandidate(candidates, camera, size.width, size.height, pointerPx, pointerPy, snapSettings.radiusPx);
+              const targetVertex = hit ? hit.candidate.point.clone() : null;
 
               if (targetVertex) {
                   const newGizmoPos = targetVertex.clone();
@@ -624,6 +590,12 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
               return <sphereGeometry args={[obj.radius || 0.5, 32, 32]} />;
           case 'plane':
               return <planeGeometry args={[obj.dimensions.x, obj.dimensions.z]} />;
+          case 'cylinder':
+              return <cylinderGeometry args={[obj.radius || 0.05, obj.radius || 0.05, obj.dimensions.y, 32]} />;
+          case 'cone':
+              return <coneGeometry args={[obj.radius || 0.05, obj.dimensions.y, 32]} />;
+          case 'torus':
+              return <torusGeometry args={[obj.radius || 0.05, Math.max(0.001, obj.dimensions.y / 2), 16, 32]} />;
           case 'box':
           default:
               return <boxGeometry args={[obj.dimensions.x, obj.dimensions.y, obj.dimensions.z]} />;
@@ -638,7 +610,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
       <group ref={selectionAnchorRef} name="selection-anchor" visible={true}>
       </group>
       
-      {activeViewportId === viewportId && <CreationOverlay />}
+      {activeViewportId === viewportId && !isEditing && <CreationOverlay />}
 
       {isGridVisible && (
         <Grid 
@@ -681,6 +653,7 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
       {objects.map((obj) => {
           const isSelected = selectedIds.includes(obj.id);
           const isPrimary = obj.id === primarySelectedId;
+          const isEditedObject = isEditing && obj.id === editObjectId;
 
           return (
             <group
@@ -691,35 +664,62 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
                 scale={[obj.scale.x, obj.scale.y, obj.scale.z]}
                 visible={obj.visible}
                 onClick={(e) => {
-                    if (interactionMode !== 'select') return;
+                    if (interactionMode !== 'select' || isEditing) return;
                     e.stopPropagation();
                     // New: check if we should ignore this click due to drag end
                     if (ignoreSelectionClick.current) return;
                     selectObject(obj.id, e.shiftKey || e.ctrlKey); 
                 }}
-                onPointerOver={() => { if(interactionMode === 'select') document.body.style.cursor = 'pointer'; }}
+                onPointerOver={() => { if(interactionMode === 'select' && !isEditing) document.body.style.cursor = 'pointer'; }}
                 onPointerOut={() => { document.body.style.cursor = 'auto'; }}
             >
-                <mesh
-                    position={[obj.geometryOffset.x, obj.geometryOffset.y, obj.geometryOffset.z]}
-                    rotation={[
-                        obj.geometryRotation ? obj.geometryRotation.x : 0, 
-                        obj.geometryRotation ? obj.geometryRotation.y : 0, 
-                        obj.geometryRotation ? obj.geometryRotation.z : 0
-                    ]}
-                >
-                    {renderGeometry(obj)}
-                    <meshStandardMaterial color={obj.color || '#4a90d9'} roughness={0.72} metalness={0.08} />
-                </mesh>
+                {obj.mesh ? (
+                    <MeshSurface
+                        mesh={obj.mesh}
+                        color={obj.color || '#4a90d9'}
+                        wireframe={isEditedObject}
+                        opacity={isEditing && !isEditedObject ? 0.25 : 1}
+                    />
+                ) : (
+                    <mesh
+                        position={[obj.geometryOffset.x, obj.geometryOffset.y, obj.geometryOffset.z]}
+                        rotation={[
+                            obj.geometryRotation ? obj.geometryRotation.x : 0, 
+                            obj.geometryRotation ? obj.geometryRotation.y : 0, 
+                            obj.geometryRotation ? obj.geometryRotation.z : 0
+                        ]}
+                    >
+                        {renderGeometry(obj)}
+                        <meshStandardMaterial color={obj.color || '#4a90d9'} roughness={0.72} metalness={0.08} />
+                    </mesh>
+                )}
+
+                {isEditedObject && (
+                    <EditOverlays
+                        mesh={obj.mesh!}
+                        selection={editSelection}
+                        hoverKey={
+                            hoverElement && activeViewportId === viewportId
+                                ? hoverElement.kind === subObjectMode
+                                    ? hoverElement.key
+                                    : null
+                                : null
+                        }
+                    />
+                )}
                 
-                {isSelected && interactionMode === 'select' && (
+                {isSelected && interactionMode === 'select' && !isEditing && (
                     <axesHelper args={[gizmoSize * (isPrimary ? 1.5 : 1.0)]} raycast={() => null} />
                 )}
             </group>
         );
       })}
 
-      {primarySelectedId && selectedObject && selectedObject.visible && activeViewportId === viewportId && transformTarget && interactionMode === 'select' && (
+      {isEditing && activeViewportId === viewportId && editObject?.mesh && (
+          <EditModeController viewportId={viewportId} />
+      )}
+
+      {primarySelectedId && selectedObject && selectedObject.visible && activeViewportId === viewportId && transformTarget && interactionMode === 'select' && !isEditing && (
         <TransformControls
           ref={transformRef}
           object={transformTarget}
@@ -734,7 +734,8 @@ const SceneContent: React.FC<{ viewportId: number; type: ViewportType }> = ({ vi
 };
 
 export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
-  const { activeViewportId, setActiveViewport, selectObject, setSelection, interactionMode, drawingPhase, objects, selectedIds } = useAppStore();
+  const { activeViewportId, setActiveViewport, selectObject, setSelection, interactionMode, drawingPhase, objects, selectedIds, editorMode, editBoxSelect, modalTransform, subObjectMode } = useAppStore();
+  const isEditing = editorMode === 'edit';
   const isActive = activeViewportId === id;
   const [isBoxSelecting, setIsBoxSelecting] = useState(false);
   const [boxStart, setBoxStart] = useState<{x: number, y: number} | null>(null);
@@ -753,12 +754,12 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
   const camProps = getCameraProps();
   const isOrtho = type !== 'perspective';
 
-  const orbitEnabled = (interactionMode === 'select' || drawingPhase === 'drawing_height') && !isBoxSelecting;
+  const orbitEnabled = (interactionMode === 'select' || drawingPhase === 'drawing_height') && !isBoxSelecting && !modalTransform;
 
   const handlePointerDown = (e: React.PointerEvent) => {
       setActiveViewport(id);
       
-      if (e.button === 0 && interactionMode === 'select') {
+      if (e.button === 0 && interactionMode === 'select' && !isEditing) {
          const rect = canvasRef.current?.getBoundingClientRect();
          if(rect) {
              setBoxStart({ x: e.clientX - rect.left, y: e.clientY - rect.top });
@@ -913,11 +914,22 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({ id, type, label }) => {
       </div>
       
       {isBoxSelecting && <SelectionBoxOverlay start={boxStart} current={boxCurrent} />}
+
+      {isEditing && activeViewportId === id && editBoxSelect && (
+        <SelectionBoxOverlay start={editBoxSelect.start} current={editBoxSelect.current} />
+      )}
+
+      {isEditing && activeViewportId === id && (
+        <div className="absolute top-2 right-2 z-10 px-2 py-0.5 bg-orange-600/80 text-white text-[10px] rounded uppercase font-bold pointer-events-none tracking-wide">
+          Edit Mode · {subObjectMode}
+          {modalTransform ? ` · ${modalTransform.type}${modalTransform.axis !== 'free' ? ' ' + modalTransform.axis.toUpperCase() : ''}` : ''}
+        </div>
+      )}
       
       <Canvas 
         className="w-full h-full bg-[#1a1a1a]"
         onPointerMissed={(e) => { 
-            if(!isBoxSelecting && interactionMode === 'select' && !e.shiftKey) {
+            if(!isBoxSelecting && interactionMode === 'select' && !isEditing && !e.shiftKey) {
                  selectObject(null); 
             }
         }}

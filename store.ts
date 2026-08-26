@@ -1,6 +1,48 @@
 
 import { create } from 'zustand';
-import { AppState, SceneObject } from './types';
+import { AppState, EditOperation, EditSelection, MeshData, SceneObject, SubObjectMode, Vector3Data } from './types';
+import {
+  activeVertexIndices,
+  applyEditOperation,
+  cloneMesh,
+  createMesh,
+  edgeKey,
+  emptySelection,
+  growSelection,
+  invertSelection,
+  joinMeshes,
+  meshBounds,
+  parseEdgeKey,
+  primitiveToMesh,
+  selectAll as selectAllElementsOf,
+  selectLinked,
+  separateMesh,
+  shrinkSelection,
+  transformMesh,
+} from './editGeometry';
+
+const cloneObjects = (objects: SceneObject[]): SceneObject[] => JSON.parse(JSON.stringify(objects));
+
+/** Appends an objects snapshot to the undo stack and commits extra state. */
+const pushObjects = (
+  set: (partial: Partial<AppState>) => void,
+  get: () => AppState,
+  objects: SceneObject[],
+  extra: Partial<AppState> = {}
+) => {
+  const { history, historyIndex } = get();
+  const nextHistory = history.slice(0, historyIndex + 1);
+  nextHistory.push(cloneObjects(objects));
+  if (nextHistory.length > 60) nextHistory.shift();
+  set({
+    objects,
+    history: nextHistory,
+    historyIndex: nextHistory.length - 1,
+    ...extra,
+  });
+};
+
+const randomId = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 11)}`;
 
 // Internal Unit = 1 Meter
 // Initial Cube: 10cm x 10cm x 10cm
@@ -49,10 +91,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   pivotCommand: null,
   pivotMode: 'selection', // Default to Group/Selection Center
   snapSettings: {
-      enabled: false,
+      enabled: true,
       grid: true,
-      vertex: false,
-      threshold: 0.2 // Default world unit threshold
+      vertex: true,
+      midpoint: true,
+      weld: true, // drop a snapped vertex onto its target and merge them
+      radiusPx: 14,
+      threshold: 0.002 // merge-by-distance tolerance in meters
   },
   unit: 'cm', 
   history: [JSON.parse(JSON.stringify(INITIAL_OBJECTS))],
@@ -61,6 +106,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   interactionMode: 'select',
   drawingPhase: 'idle',
   drawingStartPoint: null,
+
+  // --- Modelling / edit mode ---
+  editorMode: 'object',
+  editObjectId: null,
+  subObjectMode: 'vertex',
+  editSelection: { vertices: [], edges: [], faces: [] },
+  hoverElement: null,
+  modalTransform: null,
+  modalReadout: null,
+  snapSourceVertex: null,
+  snapTarget: null,
+  editBoxSelect: null,
 
   setViewportLayout: (layout) => set({ viewportLayout: layout }),
   
@@ -99,6 +156,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setSnapMode: (mode, active) => set((state) => ({
       snapSettings: { ...state.snapSettings, [mode]: active }
+  })),
+
+  setSnapRadius: (px) => set((state) => ({
+      snapSettings: { ...state.snapSettings, radiusPx: Math.max(2, Math.min(60, px)) }
   })),
 
   setUnit: (unit) => set({ unit }),
@@ -140,13 +201,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     // Add to history
     const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(JSON.parse(JSON.stringify(newObjects)));
-    
+    newHistory.push(cloneObjects(newObjects));
+
     set({
         objects: newObjects,
         selectedIds: [],
         history: newHistory,
-        historyIndex: newHistory.length - 1
+        historyIndex: newHistory.length - 1,
+        ...(get().editObjectId && selectedIds.includes(get().editObjectId!)
+          ? { editorMode: 'object' as const, editObjectId: null, editSelection: emptySelection() }
+          : {}),
     });
   },
   
@@ -329,46 +393,65 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   undo: () => {
-    const { historyIndex, history } = get();
+    const { historyIndex, history, editObjectId } = get();
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1;
+      const objects = cloneObjects(history[newIndex]);
+      const stillThere = editObjectId ? objects.some(o => o.id === editObjectId && o.mesh) : false;
       set({
         historyIndex: newIndex,
-        objects: JSON.parse(JSON.stringify(history[newIndex])),
-        selectedIds: [] // Clear selection on undo to avoid ghost references
+        objects,
+        selectedIds: stillThere ? [editObjectId!] : [], // Clear selection on undo to avoid ghost references
+        editSelection: emptySelection(),
+        snapSourceVertex: null,
+        snapTarget: null,
+        modalTransform: null,
+        ...(stillThere ? {} : { editorMode: 'object' as const, editObjectId: null }),
       });
     }
   },
 
   redo: () => {
-    const { historyIndex, history } = get();
+    const { historyIndex, history, editObjectId } = get();
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1;
+      const objects = cloneObjects(history[newIndex]);
+      const stillThere = editObjectId ? objects.some(o => o.id === editObjectId && o.mesh) : false;
       set({
         historyIndex: newIndex,
-        objects: JSON.parse(JSON.stringify(history[newIndex])),
-        selectedIds: []
+        objects,
+        selectedIds: stillThere ? [editObjectId!] : [],
+        editSelection: emptySelection(),
+        snapSourceVertex: null,
+        snapTarget: null,
+        modalTransform: null,
+        ...(stillThere ? {} : { editorMode: 'object' as const, editObjectId: null }),
       });
     }
   },
 
   // --- INTERACTION / DRAWING ACTIONS ---
   
-  setInteractionMode: (mode) => set({ interactionMode: mode, drawingPhase: 'idle', selectedIds: [] }),
+  setInteractionMode: (mode) => set({
+      interactionMode: mode,
+      drawingPhase: 'idle',
+      ...(mode === 'select' ? {} : { selectedIds: [], editorMode: 'object' as const, editObjectId: null, editSelection: emptySelection() }),
+  }),
   
   startDrawing: (pos) => {
       const { interactionMode, objects } = get();
       
-      let geometry = 'box';
-      let namePrefix = 'Cube';
-      
-      if (interactionMode === 'create_sphere') {
-          geometry = 'sphere';
-          namePrefix = 'Sphere';
-      } else if (interactionMode === 'create_plane') {
-          geometry = 'plane';
-          namePrefix = 'Plane';
-      }
+      const primitiveByMode: Record<string, { geometry: string; name: string }> = {
+          create_cube: { geometry: 'box', name: 'Cube' },
+          create_sphere: { geometry: 'sphere', name: 'Sphere' },
+          create_plane: { geometry: 'plane', name: 'Plane' },
+          create_cylinder: { geometry: 'cylinder', name: 'Cylinder' },
+          create_cone: { geometry: 'cone', name: 'Cone' },
+          create_torus: { geometry: 'torus', name: 'Torus' },
+      };
+      const primitive = primitiveByMode[interactionMode] || primitiveByMode.create_cube;
+      const geometry = primitive.geometry;
+      const namePrefix = primitive.name;
 
       let maxSuffix = 0;
       const regex = new RegExp(`^${namePrefix}_(\\d+)$`);
@@ -420,9 +503,15 @@ export const useAppStore = create<AppState>((set, get) => ({
             const dx = pos.x - drawingStartPoint.x;
             const dz = pos.z - drawingStartPoint.z;
             
-            if (interactionMode === 'create_sphere') {
+            const radial = interactionMode === 'create_sphere'
+                || interactionMode === 'create_cylinder'
+                || interactionMode === 'create_cone'
+                || interactionMode === 'create_torus';
+
+            if (radial) {
                 const dist = Math.sqrt(dx*dx + dz*dz);
                 updatedObj.radius = dist;
+                updatedObj.dimensions = { x: dist * 2, y: interactionMode === 'create_torus' ? dist * 0.7 : 0.01, z: dist * 2 };
                 updatedObj.position = { ...drawingStartPoint }; 
             } else {
                 updatedObj.dimensions = { 
@@ -436,16 +525,22 @@ export const useAppStore = create<AppState>((set, get) => ({
                     z: drawingStartPoint.z + dz / 2
                 };
             }
-        } else if (drawingPhase === 'drawing_height' && interactionMode === 'create_cube') {
+        } else if (drawingPhase === 'drawing_height') {
             const height = pos.y - drawingStartPoint.y;
-            updatedObj.dimensions = {
-                ...updatedObj.dimensions,
-                y: Math.abs(height)
-            };
-            updatedObj.position = {
-                ...updatedObj.position,
-                y: drawingStartPoint.y + height / 2
-            };
+            if (interactionMode === 'create_torus') {
+                // second drag sets the tube radius
+                const tube = Math.min(Math.abs(height), (updatedObj.radius || 0.01) * 0.9);
+                updatedObj.dimensions = { ...updatedObj.dimensions, y: tube * 2 };
+            } else {
+                updatedObj.dimensions = {
+                    ...updatedObj.dimensions,
+                    y: Math.abs(height)
+                };
+                updatedObj.position = {
+                    ...updatedObj.position,
+                    y: drawingStartPoint.y + height / 2
+                };
+            }
         }
         
         return updatedObj;
@@ -457,7 +552,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   stopDrawingBase: () => {
       const { interactionMode, recordHistory } = get();
       
-      if (interactionMode === 'create_cube') {
+      const needsHeight = interactionMode === 'create_cube'
+          || interactionMode === 'create_cylinder'
+          || interactionMode === 'create_cone'
+          || interactionMode === 'create_torus';
+
+      if (needsHeight) {
           set({ drawingPhase: 'drawing_height' });
       } else {
           recordHistory();
@@ -476,5 +576,253 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (drawingPhase === 'idle') return;
       const nextObjects = objects.filter(obj => !selectedIds.includes(obj.id));
       set({ objects: nextObjects, selectedIds: [], drawingPhase: 'idle', drawingStartPoint: null, interactionMode: 'select' });
-  }
+  },
+
+  /* ------------------------------------------------------------------ *
+   * MODELLING (Blender / 3ds Max style edit mode)
+   * ------------------------------------------------------------------ */
+
+  convertToMesh: (id) => {
+      const { objects } = get();
+      const obj = objects.find(o => o.id === id);
+      if (!obj || obj.mesh) return;
+      const mesh = primitiveToMesh(obj);
+      const bounds = meshBounds(mesh);
+      pushObjects(set, get, objects.map(o => o.id === id ? {
+          ...o,
+          mesh,
+          editable: true,
+          geometry: 'mesh',
+          geometryOffset: { x: 0, y: 0, z: 0 },
+          geometryRotation: { x: 0, y: 0, z: 0 },
+          dimensions: bounds.size,
+      } : o));
+  },
+
+  enterEditMode: (id) => {
+      const state = get();
+      const targetId = id ?? state.selectedIds[state.selectedIds.length - 1];
+      if (!targetId) return;
+      const obj = state.objects.find(o => o.id === targetId);
+      if (!obj) return;
+
+      if (!obj.mesh) state.convertToMesh(targetId);
+
+      const current = get().objects.find(o => o.id === targetId);
+      if (!current || !current.mesh) return;
+
+      const objects = get().objects.map(o => o.id === targetId ? { ...o, visible: true } : o);
+      set({
+          objects,
+          editorMode: 'edit',
+          editObjectId: targetId,
+          selectedIds: [targetId],
+          editSelection: emptySelection(),
+          hoverElement: null,
+          modalTransform: null,
+          snapSourceVertex: null,
+          snapTarget: null,
+          interactionMode: 'select',
+          drawingPhase: 'idle',
+      });
+  },
+
+  exitEditMode: () => {
+      const { editObjectId } = get();
+      set({
+          editorMode: 'object',
+          editObjectId: null,
+          editSelection: emptySelection(),
+          hoverElement: null,
+          modalTransform: null,
+          snapSourceVertex: null,
+          snapTarget: null,
+          editBoxSelect: null,
+          selectedIds: editObjectId ? [editObjectId] : [],
+      });
+  },
+
+  toggleEditorMode: () => {
+      const { editorMode, enterEditMode, exitEditMode } = get();
+      if (editorMode === 'edit') exitEditMode();
+      else enterEditMode();
+  },
+
+  setSubObjectMode: (mode) => set({ subObjectMode: mode, hoverElement: null }),
+
+  setEditSelection: (selection, additive = false) => set((state) => {
+      if (!additive) return { editSelection: { ...emptySelection(), ...selection } };
+      const cur = state.editSelection;
+      return {
+          editSelection: {
+              vertices: selection.vertices ? Array.from(new Set([...cur.vertices, ...selection.vertices])) : cur.vertices,
+              edges: selection.edges ? Array.from(new Set([...cur.edges, ...selection.edges])) : cur.edges,
+              faces: selection.faces ? Array.from(new Set([...cur.faces, ...selection.faces])) : cur.faces,
+          },
+      };
+  }),
+
+  toggleEditElement: (kind, key) => set((state) => {
+      const sel = state.editSelection;
+      if (kind === 'vertex') {
+          const i = parseInt(key, 10);
+          const has = sel.vertices.includes(i);
+          return { editSelection: { ...sel, vertices: has ? sel.vertices.filter(v => v !== i) : [...sel.vertices, i] } };
+      }
+      if (kind === 'face') {
+          const i = parseInt(key, 10);
+          const has = sel.faces.includes(i);
+          return { editSelection: { ...sel, faces: has ? sel.faces.filter(v => v !== i) : [...sel.faces, i] } };
+      }
+      const has = sel.edges.includes(key);
+      return { editSelection: { ...sel, edges: has ? sel.edges.filter(k => k !== key) : [...sel.edges, key] } };
+  }),
+
+  clearEditSelection: () => set({ editSelection: emptySelection(), snapSourceVertex: null }),
+
+  selectAllElements: () => {
+      const state = get();
+      const obj = state.objects.find(o => o.id === state.editObjectId);
+      if (!obj || !obj.mesh) return;
+      set({ editSelection: selectAllElementsOf(obj.mesh) });
+  },
+
+  invertEditSelection: () => {
+      const state = get();
+      const obj = state.objects.find(o => o.id === state.editObjectId);
+      if (!obj || !obj.mesh) return;
+      set({ editSelection: invertSelection(obj.mesh, state.editSelection) });
+  },
+
+  growEditSelection: () => {
+      const state = get();
+      const obj = state.objects.find(o => o.id === state.editObjectId);
+      if (!obj || !obj.mesh) return;
+      set({ editSelection: growSelection(obj.mesh, state.editSelection, state.subObjectMode) });
+  },
+
+  shrinkEditSelection: () => {
+      const state = get();
+      const obj = state.objects.find(o => o.id === state.editObjectId);
+      if (!obj || !obj.mesh) return;
+      set({ editSelection: shrinkSelection(obj.mesh, state.editSelection, state.subObjectMode) });
+  },
+
+  selectLinked: (seed) => {
+      const state = get();
+      const obj = state.objects.find(o => o.id === state.editObjectId);
+      if (!obj || !obj.mesh) return;
+      let seeds: number[] = [];
+      if (seed !== undefined) seeds = [parseInt(seed, 10)];
+      else if (state.editSelection.vertices.length > 0) seeds = state.editSelection.vertices;
+      else if (state.hoverElement && state.hoverElement.kind === 'vertex') seeds = [parseInt(state.hoverElement.key, 10)];
+      if (seeds.length === 0 || seeds.some(s => Number.isNaN(s))) return;
+      set({ editSelection: selectLinked(obj.mesh, seeds) });
+  },
+
+  runEditOp: (op, recordHistory = true) => {
+      const state = get();
+      const id = state.editObjectId;
+      if (!id) return;
+      const obj = state.objects.find(o => o.id === id);
+      if (!obj || !obj.mesh) return;
+
+      const result = applyEditOperation(obj.mesh, state.editSelection, state.subObjectMode, op);
+      if (!result.changed) return;
+
+      const bounds = meshBounds(result.mesh);
+      const objects = state.objects.map(o => o.id === id
+          ? { ...o, mesh: result.mesh, dimensions: bounds.size }
+          : o);
+
+      const extra: Partial<AppState> = {
+          editSelection: result.selection,
+          snapTarget: null,
+      };
+
+      if (recordHistory) pushObjects(set, get, objects, extra);
+      else set({ objects, ...extra });
+  },
+
+  setEditMesh: (mesh, recordHistory = true) => {
+      const state = get();
+      const id = state.editObjectId;
+      if (!id) return;
+      const bounds = meshBounds(mesh);
+      const objects = state.objects.map(o => o.id === id
+          ? { ...o, mesh, dimensions: bounds.size }
+          : o);
+      if (recordHistory) pushObjects(set, get, objects);
+      else set({ objects });
+  },
+
+  setHoverElement: (el) => set({ hoverElement: el }),
+  setModalTransform: (t) => set({ modalTransform: t, modalReadout: t ? { amount: 0, snapped: false } : null }),
+  setModalReadout: (r) => set({ modalReadout: r }),
+  setModalAxis: (axis) => set((state) => (state.modalTransform ? { modalTransform: { ...state.modalTransform, axis } } : {})),
+  setSnapSourceVertex: (index) => set({ snapSourceVertex: index }),
+  setSnapTarget: (t) => set({ snapTarget: t }),
+  setEditBoxSelect: (box) => set({ editBoxSelect: box }),
+
+  joinSelected: () => {
+      const state = get();
+      if (state.selectedIds.length < 2) return;
+      const chosen = state.objects.filter(o => state.selectedIds.includes(o.id));
+      const meshes = chosen.map(o => {
+          const mesh = o.mesh ? cloneMesh(o.mesh) : primitiveToMesh(o);
+          return transformMesh(mesh, { position: o.position, rotation: o.rotation, scale: o.scale });
+      });
+      const joined = joinMeshes(meshes);
+      const bounds = meshBounds(joined);
+      const newObj: SceneObject = {
+          id: randomId('mesh'),
+          name: `${chosen[0].name}_joined`,
+          type: 'mesh',
+          position: { x: 0, y: 0, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 },
+          dimensions: bounds.size,
+          geometryOffset: { x: 0, y: 0, z: 0 },
+          geometryRotation: { x: 0, y: 0, z: 0 },
+          visible: true,
+          geometry: 'mesh',
+          color: chosen[0].color,
+          mesh: joined,
+          editable: true,
+      };
+      const rest = state.objects.filter(o => !state.selectedIds.includes(o.id));
+      pushObjects(set, get, [...rest, newObj], {
+          selectedIds: [newObj.id],
+          editorMode: 'object',
+          editObjectId: null,
+          editSelection: emptySelection(),
+      });
+  },
+
+  separateSelected: () => {
+      const state = get();
+      const id = state.editObjectId ?? state.selectedIds[state.selectedIds.length - 1];
+      if (!id) return;
+      const obj = state.objects.find(o => o.id === id);
+      if (!obj || !obj.mesh) return;
+      const parts = separateMesh(obj.mesh);
+      if (parts.length < 2) return;
+
+      const created: SceneObject[] = parts.map((mesh, i) => ({
+          ...JSON.parse(JSON.stringify(obj)),
+          id: randomId('mesh'),
+          name: parts.length > 1 ? `${obj.name}_${(i + 1).toString().padStart(2, '0')}` : obj.name,
+          mesh,
+          editable: true,
+          geometry: 'mesh',
+          dimensions: meshBounds(mesh).size,
+      }));
+      const rest = state.objects.filter(o => o.id !== id);
+      pushObjects(set, get, [...rest, ...created], {
+          selectedIds: created.map(o => o.id),
+          editorMode: 'object',
+          editObjectId: null,
+          editSelection: emptySelection(),
+      });
+  },
 }));

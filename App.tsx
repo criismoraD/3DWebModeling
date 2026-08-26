@@ -2,7 +2,10 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from './store';
 import { Viewport3D } from './components/Viewport3D';
-import { ViewportType, UnitType, SceneObject } from './types';
+import { ViewportType, UnitType, SceneObject, SubObjectMode } from './types';
+import { activeVertexIndices, meshBounds } from './editGeometry';
+import { objectMatrix } from './components/snapping';
+import * as THREE from 'three';
 import { 
   Box, 
   Eye, 
@@ -33,8 +36,28 @@ import {
   Target,
   Hash,
   Magnet,
-  Triangle
+  Triangle,
+  Boxes,
+  Move3d,
+  PenTool,
+  Scissors,
+  Combine,
+  Split,
+  Wand2,
+  Crosshair,
+  Hexagon,
+  Dot,
+  FlipHorizontal2,
+  GitMerge,
+  Layers3,
+  Spline,
+  Minus,
+  Plus
 } from 'lucide-react';
+
+const getUnitFactor = (u: UnitType) => {
+  switch (u) { case 'mm': return 1000; case 'cm': return 100; case 'in': return 39.3701; default: return 1; }
+};
 
 const HeaderButton: React.FC<{ 
   active?: boolean; 
@@ -221,7 +244,7 @@ const CoordinateInputBar: React.FC = () => {
 
 // Snap Toolbar Dropdown
 const SnapDropdown: React.FC = () => {
-    const { snapSettings, setSnapMode } = useAppStore();
+    const { snapSettings, setSnapMode, setSnapRadius, unit } = useAppStore();
     const [isOpen, setIsOpen] = useState(false);
 
     return (
@@ -235,23 +258,40 @@ const SnapDropdown: React.FC = () => {
              {isOpen && (
                  <>
                     <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
-                    <div className="absolute top-full left-0 mt-1 bg-gray-850 border border-gray-700 shadow-xl rounded w-32 z-50 py-1 flex flex-col">
+                    <div className="absolute top-full left-0 mt-1 bg-gray-850 border border-gray-700 shadow-xl rounded w-48 z-50 py-1 flex flex-col">
                         <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-xs">
-                            <input 
-                                type="checkbox" 
-                                checked={snapSettings.grid} 
-                                onChange={(e) => setSnapMode('grid', e.target.checked)}
-                            />
+                            <input type="checkbox" checked={snapSettings.grid} onChange={(e) => setSnapMode('grid', e.target.checked)} />
                             <Grid3X3 size={12} /> Grid Points
                         </label>
                         <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-xs">
-                            <input 
-                                type="checkbox" 
-                                checked={snapSettings.vertex} 
-                                onChange={(e) => setSnapMode('vertex', e.target.checked)}
-                            />
+                            <input type="checkbox" checked={snapSettings.vertex} onChange={(e) => setSnapMode('vertex', e.target.checked)} />
                             <Triangle size={12} /> Vertex
                         </label>
+                        <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-xs">
+                            <input type="checkbox" checked={snapSettings.midpoint} onChange={(e) => setSnapMode('midpoint', e.target.checked)} />
+                            <Dot size={12} /> Edge Midpoint
+                        </label>
+                        <div className="border-t border-gray-700 my-1"></div>
+                        <label className="flex items-start gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-xs">
+                            <input type="checkbox" className="mt-0.5" checked={snapSettings.weld} onChange={(e) => setSnapMode('weld', e.target.checked)} />
+                            <span className="flex items-center gap-1"><GitMerge size={12} /> Weld on drop
+                            <span className="block text-[9px] text-gray-500 leading-tight">merges the snapped vertex into its target</span></span>
+                        </label>
+                        <div className="px-3 py-1.5 text-xs flex items-center gap-2 border-t border-gray-700">
+                            <span className="text-gray-400">Radius</span>
+                            <input
+                                type="range"
+                                min={4}
+                                max={40}
+                                value={snapSettings.radiusPx}
+                                onChange={(e) => setSnapRadius(parseInt(e.target.value, 10))}
+                                className="flex-1 accent-accent-500"
+                            />
+                            <span className="text-gray-500 w-8 text-right">{snapSettings.radiusPx}px</span>
+                        </div>
+                        <div className="px-3 py-1 text-[10px] text-gray-500">
+                            Grid = {unit === 'mm' ? '1mm' : unit === 'cm' ? '1cm' : unit === 'in' ? '1in' : '1m'}
+                        </div>
                     </div>
                  </>
              )}
@@ -259,13 +299,215 @@ const SnapDropdown: React.FC = () => {
     );
 };
 
+/** Object Mode / Edit Mode switch (Tab). */
+const ModeSwitch: React.FC = () => {
+  const { editorMode, toggleEditorMode, selectedIds } = useAppStore();
+  const canEdit = selectedIds.length > 0;
+  return (
+    <div className="flex items-center bg-gray-850 border border-gray-700 rounded h-[26px] p-0.5">
+      <button
+        onClick={() => editorMode !== 'object' && toggleEditorMode()}
+        title="Object Mode (Tab)"
+        className={`px-2 h-full rounded text-xs flex items-center gap-1 transition-colors ${
+          editorMode === 'object' ? 'bg-accent-500 text-white' : 'text-gray-400 hover:text-white'
+        }`}
+      >
+        <Box size={13} /> Object
+      </button>
+      <button
+        onClick={() => editorMode !== 'edit' && canEdit && toggleEditorMode()}
+        title={canEdit ? 'Edit Mode (Tab) - converts the object into an editable mesh' : 'Select an object first'}
+        className={`px-2 h-full rounded text-xs flex items-center gap-1 transition-colors ${
+          editorMode === 'edit' ? 'bg-orange-500 text-white' : canEdit ? 'text-gray-400 hover:text-white' : 'text-gray-600 cursor-not-allowed'
+        }`}
+      >
+        <PenTool size={13} /> Edit
+      </button>
+    </div>
+  );
+};
+
+/** Vertex / Edge / Face sub-object modes (1 / 2 / 3). */
+const SubObjectModes: React.FC = () => {
+  const { subObjectMode, setSubObjectMode, editSelection } = useAppStore();
+  const items: { mode: SubObjectMode; label: string; icon: React.ReactNode; count: number }[] = [
+    { mode: 'vertex', label: 'Vertices (1)', icon: <Dot size={14} />, count: editSelection.vertices.length },
+    { mode: 'edge', label: 'Edges (2)', icon: <Spline size={14} />, count: editSelection.edges.length },
+    { mode: 'face', label: 'Faces (3)', icon: <Square size={14} />, count: editSelection.faces.length },
+  ];
+  return (
+    <div className="flex items-center bg-gray-850 border border-gray-700 rounded h-[26px] p-0.5">
+      {items.map(item => (
+        <button
+          key={item.mode}
+          onClick={() => setSubObjectMode(item.mode)}
+          title={item.label}
+          className={`px-2 h-full rounded text-xs flex items-center gap-1 transition-colors ${
+            subObjectMode === item.mode ? 'bg-orange-500 text-white' : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          {item.icon}
+          {item.count > 0 && <span className="text-[10px] opacity-80">{item.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+};
+
+/** Merge / Weld dropdown. */
+const MergeDropdown: React.FC = () => {
+  const { runEditOp, editObjectId, objects, editSelection, snapTarget, hoverElement, snapSettings } = useAppStore();
+  const [isOpen, setIsOpen] = useState(false);
+
+  const targetLocal = (): { x: number; y: number; z: number } | undefined => {
+    const obj = objects.find(o => o.id === editObjectId);
+    if (!obj) return undefined;
+    const world = snapTarget?.point ?? hoverElement?.point;
+    if (!world) return undefined;
+    const inv = objectMatrix(obj).invert();
+    const p = new THREE.Vector3(world.x, world.y, world.z).applyMatrix4(inv);
+    return { x: p.x, y: p.y, z: p.z };
+  };
+
+  const merge = (mode: 'center' | 'first' | 'last' | 'cursor') => {
+    setIsOpen(false);
+    if (mode === 'cursor') {
+      const cursor = targetLocal();
+      if (!cursor) return;
+      runEditOp({ type: 'merge', mode: 'cursor', cursor });
+      return;
+    }
+    runEditOp({ type: 'merge', mode });
+  };
+
+  const item = (label: string, hint: string, onClick: () => void) => (
+    <button onClick={onClick} className="text-left px-3 py-1.5 hover:bg-gray-700 text-xs w-full">
+      <span className="block">{label}</span>
+      <span className="block text-[9px] text-gray-500 leading-tight">{hint}</span>
+    </button>
+  );
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        title="Merge / Weld vertices (Alt+M)"
+        className="p-1.5 rounded-md bg-gray-750 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-700 flex items-center gap-1 text-xs"
+      >
+        <GitMerge size={14} />
+      </button>
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+          <div className="absolute top-full right-0 mt-1 bg-gray-850 border border-gray-700 shadow-xl rounded w-56 z-50 py-1 flex flex-col">
+            {item('At Center', 'collapse the selection to its average position', () => merge('center'))}
+            {item('At Target / Cursor', 'drop onto the highlighted snap target', () => merge('cursor'))}
+            {item('At First', 'keep the first selected vertex position', () => merge('first'))}
+            {item('At Last', 'keep the last selected vertex position', () => merge('last'))}
+            <div className="border-t border-gray-700 my-1"></div>
+            {item(
+              'Weld by distance',
+              `merge every pair closer than ${(snapSettings.threshold * 1000).toFixed(1)}mm`,
+              () => {
+                setIsOpen(false);
+                runEditOp({ type: 'weld', threshold: snapSettings.threshold });
+              }
+            )}
+            <div className="px-3 py-1 text-[10px] text-gray-500 border-t border-gray-700">
+              {activeVertexCountLabel(objects.find(o => o.id === editObjectId), editSelection)}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+const activeVertexCountLabel = (obj: SceneObject | undefined, selection: { vertices: number[]; edges: string[]; faces: number[] }) => {
+  if (!obj?.mesh) return 'No editable mesh';
+  const n = activeVertexIndices(obj.mesh, selection).length;
+  return `${n} vertex${n === 1 ? '' : 'es'} in the selection`;
+};
+
+/** Edit-mode modelling tools. */
+const EditToolbar: React.FC = () => {
+  const {
+    runEditOp, setModalTransform, editObjectId, editSelection, subObjectMode, selectAllElements,
+    clearEditSelection, invertEditSelection, growEditSelection, shrinkEditSelection, separateSelected,
+  } = useAppStore();
+
+  const startModal = (type: 'move' | 'rotate' | 'scale') => {
+    if (!editObjectId) return;
+    setModalTransform({ type, axis: 'free', objectId: editObjectId, sourceVertex: null, amount: 0, snapped: false });
+  };
+
+  const extrude = () => {
+    if (activeVertexCount(editSelection) === 0) return;
+    runEditOp({ type: 'extrude' });
+    if (editObjectId) {
+      setModalTransform({ type: 'move', axis: 'free', objectId: editObjectId, sourceVertex: null, amount: 0, snapped: false });
+    }
+  };
+
+  const btn = (title: string, onClick: () => void, icon: React.ReactNode, disabled = false) => (
+    <button
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className={`p-1.5 rounded-md border text-xs flex items-center gap-1 transition-colors ${
+        disabled
+          ? 'bg-gray-800 text-gray-600 border-gray-800 cursor-not-allowed'
+          : 'bg-gray-750 text-gray-400 hover:bg-gray-700 hover:text-white border-gray-700'
+      }`}
+    >
+      {icon}
+    </button>
+  );
+
+  return (
+    <div className="flex items-center gap-1">
+      {btn('Grab / Move (G)', () => startModal('move'), <Move size={14} />, activeVertexCount(editSelection) === 0)}
+      {btn('Rotate (R)', () => startModal('rotate'), <RotateCw size={14} />, activeVertexCount(editSelection) === 0)}
+      {btn('Scale (S)', () => startModal('scale'), <Scaling size={14} />, activeVertexCount(editSelection) === 0)}
+      <div className="w-px h-4 bg-gray-700 mx-1"></div>
+      {btn('Extrude (E)', extrude, <Layers3 size={14} />, activeVertexCount(editSelection) === 0)}
+      {btn('Create Face / Edge (F)', () => runEditOp({ type: 'create-face' }), <PenTool size={14} />, activeVertexCount(editSelection) < 2)}
+      {btn('Subdivide (Ctrl+R)', () => runEditOp({ type: 'subdivide', iterations: 1 }), <Grid2x2Icon />, false)}
+      {btn('Triangulate (Ctrl+T)', () => runEditOp({ type: 'triangulate' }), <Triangle size={14} />, editSelection.faces.length === 0)}
+      {btn('Flip Normals (Shift+N)', () => runEditOp({ type: 'flip-normals' }), <FlipHorizontal2 size={14} />, editSelection.faces.length === 0)}
+      <MergeDropdown />
+      <div className="w-px h-4 bg-gray-700 mx-1"></div>
+      {btn('Delete (X)', () => runEditOp({ type: 'delete' }), <Trash2 size={14} />, activeVertexCount(editSelection) === 0)}
+      {btn('Remove loose vertices', () => runEditOp({ type: 'delete-loose' }), <Scissors size={14} />)}
+      <div className="w-px h-4 bg-gray-700 mx-1"></div>
+      {btn('Select all elements (A)', selectAllElements, <BoxSelect size={14} />)}
+      {btn('Deselect (Alt+A)', clearEditSelection, <SquareDashedIcon />)}
+      {btn('Invert selection (Ctrl+I)', invertEditSelection, <RefreshCcw size={14} />)}
+      {btn('Grow selection (])', growEditSelection, <Plus size={14} />)}
+      {btn('Shrink selection ([)', shrinkEditSelection, <Minus size={14} />)}
+      {btn('Separate by loose parts (P)', separateSelected, <Split size={14} />)}
+    </div>
+  );
+};
+
+const activeVertexCount = (selection: { vertices: number[]; edges: string[]; faces: number[] }) =>
+  selection.vertices.length + selection.edges.length + selection.faces.length;
+
+const Grid2x2Icon: React.FC = () => <Grid3X3 size={14} />;
+const SquareDashedIcon: React.FC = () => <Square size={14} />;
+
 const MenuBar = () => {
   const store = useAppStore();
   const gridVisible = store.viewportGridStates[store.activeViewportId];
   
   return (
-    <div className="h-10 bg-gradient-to-b from-gray-750 to-gray-800 border-b border-gray-950 flex items-center px-4 gap-4 select-none">
-      <div className="flex items-center gap-2 pr-4 border-r border-gray-600">
+    <div className="h-10 bg-gradient-to-b from-gray-750 to-gray-800 border-b border-gray-950 flex items-center px-4 gap-3 select-none">
+      <div className="flex items-center gap-2 pr-3 border-r border-gray-600">
+        <ModeSwitch />
+        {store.editorMode === 'edit' && <SubObjectModes />}
+      </div>
+
+      <div className="flex items-center gap-2 pr-3 border-r border-gray-600">
         <label className="text-gray-400 text-xs">Layout</label>
         <select 
           value={store.viewportLayout} 
@@ -309,21 +551,40 @@ const MenuBar = () => {
         </div>
       </div>
       
-      {/* Creation Tools */}
-      <div className="flex items-center gap-1 pr-4 border-r border-gray-600">
-         <HeaderButton active={store.interactionMode === 'select'} onClick={() => store.setInteractionMode('select')} title="Select Object">
-           <Move size={14} />
-         </HeaderButton>
-         <HeaderButton active={store.interactionMode === 'create_cube'} onClick={() => store.setInteractionMode('create_cube')} title="Create Cube">
-           <Box size={14} />
-         </HeaderButton>
-         <HeaderButton active={store.interactionMode === 'create_sphere'} onClick={() => store.setInteractionMode('create_sphere')} title="Create Sphere">
-           <Circle size={14} />
-         </HeaderButton>
-         <HeaderButton active={store.interactionMode === 'create_plane'} onClick={() => store.setInteractionMode('create_plane')} title="Create Plane">
-           <Square size={14} />
-         </HeaderButton>
-      </div>
+      {/* Creation Tools (object mode) / Modelling Tools (edit mode) */}
+      {store.editorMode === 'edit' ? (
+        <div className="flex items-center pr-3 border-r border-gray-600">
+          <EditToolbar />
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 pr-3 border-r border-gray-600">
+           <HeaderButton active={store.interactionMode === 'select'} onClick={() => store.setInteractionMode('select')} title="Select Object">
+             <Move size={14} />
+           </HeaderButton>
+           <HeaderButton active={store.interactionMode === 'create_cube'} onClick={() => store.setInteractionMode('create_cube')} title="Create Cube">
+             <Box size={14} />
+           </HeaderButton>
+           <HeaderButton active={store.interactionMode === 'create_sphere'} onClick={() => store.setInteractionMode('create_sphere')} title="Create Sphere">
+             <Circle size={14} />
+           </HeaderButton>
+           <HeaderButton active={store.interactionMode === 'create_plane'} onClick={() => store.setInteractionMode('create_plane')} title="Create Plane">
+             <Square size={14} />
+           </HeaderButton>
+           <HeaderButton active={store.interactionMode === 'create_cylinder'} onClick={() => store.setInteractionMode('create_cylinder')} title="Create Cylinder">
+             <Disc size={14} />
+           </HeaderButton>
+           <HeaderButton active={store.interactionMode === 'create_cone'} onClick={() => store.setInteractionMode('create_cone')} title="Create Cone">
+             <Triangle size={14} />
+           </HeaderButton>
+           <HeaderButton active={store.interactionMode === 'create_torus'} onClick={() => store.setInteractionMode('create_torus')} title="Create Torus">
+             <CircleDashed size={14} />
+           </HeaderButton>
+           <div className="w-px h-4 bg-gray-700 mx-1"></div>
+           <HeaderButton onClick={store.joinSelected} title="Join selected objects into one editable mesh (Ctrl+J)">
+             <Combine size={14} />
+           </HeaderButton>
+        </div>
+      )}
 
       <div className="flex items-center gap-1">
         <HeaderButton active={store.transformMode === 'translate'} onClick={() => store.setTransformMode('translate')} title="Translate (W)">
@@ -436,7 +697,8 @@ const SceneExplorer = () => {
 };
 
 const PropertiesPanel = () => {
-  const { objects, selectedIds, updateObject, setPivotCommand, unit } = useAppStore();
+  const store = useAppStore();
+  const { objects, selectedIds, updateObject, setPivotCommand, unit, enterEditMode, convertToMesh } = store;
   
   if (selectedIds.length === 0) {
     return (
@@ -483,6 +745,48 @@ const PropertiesPanel = () => {
       )}
       
       <div className="p-3 space-y-4">
+        {/* Mesh data / edit mode entry point */}
+        <div className="space-y-2">
+            <div className="text-[10px] font-bold text-gray-500 uppercase bg-gray-950/50 px-2 py-1 rounded">Geometry</div>
+            {selectedObject.mesh ? (
+                <>
+                    <div className="grid grid-cols-3 gap-1 text-center">
+                        <div className="bg-gray-950 border border-gray-700 rounded p-1">
+                            <div className="text-[9px] text-gray-500 uppercase">Verts</div>
+                            <div className="text-xs text-gray-200">{selectedObject.mesh.vertices.length}</div>
+                        </div>
+                        <div className="bg-gray-950 border border-gray-700 rounded p-1">
+                            <div className="text-[9px] text-gray-500 uppercase">Edges</div>
+                            <div className="text-xs text-gray-200">
+                                {new Set([
+                                    ...selectedObject.mesh.faces.flatMap(f => f.map((v, i) => (v < f[(i + 1) % f.length] ? `${v}-${f[(i + 1) % f.length]}` : `${f[(i + 1) % f.length]}-${v}`))),
+                                    ...selectedObject.mesh.edges.map(([a, b]) => (a < b ? `${a}-${b}` : `${b}-${a}`)),
+                                ]).size}
+                            </div>
+                        </div>
+                        <div className="bg-gray-950 border border-gray-700 rounded p-1">
+                            <div className="text-[9px] text-gray-500 uppercase">Faces</div>
+                            <div className="text-xs text-gray-200">{selectedObject.mesh.faces.length}</div>
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => enterEditMode(selectedObject.id)}
+                        className="w-full bg-orange-600/20 hover:bg-orange-600/40 border border-orange-600/50 text-orange-300 text-xs py-1.5 rounded flex items-center justify-center gap-2"
+                    >
+                        <PenTool size={12} /> {store.editorMode === 'edit' && store.editObjectId === selectedObject.id ? 'Editing this mesh' : 'Enter Edit Mode (Tab)'}
+                    </button>
+                </>
+            ) : (
+                <button
+                    onClick={() => { convertToMesh(selectedObject.id); enterEditMode(selectedObject.id); }}
+                    className="w-full bg-gray-750 hover:bg-gray-700 border border-gray-700 text-gray-300 text-xs py-1.5 rounded flex items-center justify-center gap-2"
+                    title="Converts the primitive into an editable polygon mesh"
+                >
+                    <Boxes size={12} /> Make Editable &amp; Edit (Tab)
+                </button>
+            )}
+        </div>
+
         {/* Identity Group */}
         <div className="space-y-2">
             <div className="text-[10px] font-bold text-gray-500 uppercase bg-gray-950/50 px-2 py-1 rounded">Object</div>
@@ -548,7 +852,7 @@ const PropertiesPanel = () => {
             </div>
 
              {/* Dimensions / Parameters based on geometry */}
-             <div className="space-y-1">
+             {!selectedObject.mesh && <div className="space-y-1">
                 <label className="text-[10px] text-gray-500">
                     {selectedObject.geometry === 'sphere' ? `Radius (${unit})` : `Dimensions (${unit})`}
                 </label>
@@ -566,7 +870,13 @@ const PropertiesPanel = () => {
                         <PropertyInput label="Z" color="text-gray-400" value={selectedObject.dimensions ? selectedObject.dimensions.z : 0.1} conversionFactor={factor} onChange={(v) => updateObject(selectedObject.id, { dimensions: { ...selectedObject.dimensions, z: v } })} />
                     </div>
                 )}
-            </div>
+            </div>}
+            {selectedObject.mesh && (
+                <div className="text-[10px] text-gray-500 bg-gray-950/60 border border-gray-800 rounded px-2 py-1.5">
+                    Editable mesh: primitive parameters are baked. Size is now driven by the
+                    vertices ({(meshBounds(selectedObject.mesh).size.x * factor).toFixed(1)} × {(meshBounds(selectedObject.mesh).size.y * factor).toFixed(1)} × {(meshBounds(selectedObject.mesh).size.z * factor).toFixed(1)} {unit}).
+                </div>
+            )}
         </div>
         
         {/* Geometry Offset (Advanced) */}
@@ -638,6 +948,70 @@ export default function App() {
 
       const key = e.key.toLowerCase();
       const isCtrl = e.ctrlKey || e.metaKey; // Support Cmd on Mac
+
+      // --- Tab switches between Object Mode and Edit Mode ---
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        store.toggleEditorMode();
+        return;
+      }
+
+      // --- Edit mode shortcuts (Blender style) ---
+      if (store.editorMode === 'edit') {
+        const st = useAppStore.getState();
+        const hasSelection =
+          st.editSelection.vertices.length + st.editSelection.edges.length + st.editSelection.faces.length > 0;
+        const startModal = (type: 'move' | 'rotate' | 'scale') => {
+          if (!st.editObjectId || !hasSelection) return;
+          e.preventDefault();
+          st.setModalTransform({ type, axis: 'free', objectId: st.editObjectId, sourceVertex: null, amount: 0, snapped: false });
+        };
+
+        if (isCtrl && key === 'z') { e.preventDefault(); st.undo(); return; }
+        if (isCtrl && key === 'y') { e.preventDefault(); st.redo(); return; }
+        if (isCtrl && key === 'r') { e.preventDefault(); st.runEditOp({ type: 'subdivide', iterations: 1 }); return; }
+        if (isCtrl && key === 't') { e.preventDefault(); st.runEditOp({ type: 'triangulate' }); return; }
+        if (isCtrl && key === 'i') { e.preventDefault(); st.invertEditSelection(); return; }
+        if (e.altKey && key === 'a') { e.preventDefault(); st.clearEditSelection(); return; }
+        if (e.altKey && key === 'm') { e.preventDefault(); st.runEditOp({ type: 'merge', mode: 'center' }); return; }
+
+        switch (key) {
+          case '1': st.setSubObjectMode('vertex'); break;
+          case '2': st.setSubObjectMode('edge'); break;
+          case '3': st.setSubObjectMode('face'); break;
+          case 'g': startModal('move'); break;
+          case 'r': startModal('rotate'); break;
+          case 's': startModal('scale'); break;
+          case 'e':
+            if (!hasSelection) break;
+            e.preventDefault();
+            st.runEditOp({ type: 'extrude' });
+            if (st.editObjectId) {
+              useAppStore.getState().setModalTransform({ type: 'move', axis: 'free', objectId: st.editObjectId, sourceVertex: null, amount: 0, snapped: false });
+            }
+            break;
+          case 'f': st.runEditOp({ type: 'create-face' }); break;
+          case 'x':
+          case 'delete':
+          case 'backspace': e.preventDefault(); st.runEditOp({ type: 'delete' }); break;
+          case 'a': e.preventDefault(); st.selectAllElements(); break;
+          case 'l': st.selectLinked(); break;
+          case 'v': st.runEditOp({ type: 'weld', threshold: st.snapSettings.threshold }); break;
+          case 'p': e.preventDefault(); st.separateSelected(); break;
+          case '[': st.shrinkEditSelection(); break;
+          case ']': st.growEditSelection(); break;
+          case 'n': if (e.shiftKey) st.runEditOp({ type: 'flip-normals' }); break;
+          case 'escape': e.preventDefault(); st.clearEditSelection(); break;
+        }
+        if (e.key === 'Shift' && key === 'n') st.runEditOp({ type: 'flip-normals' });
+        return;
+      }
+
+      if (isCtrl && key === 'j') {
+        e.preventDefault();
+        store.joinSelected();
+        return;
+      }
 
       if (isCtrl && key === 'z') {
         e.preventDefault();
@@ -741,18 +1115,51 @@ export default function App() {
 
       {/* Status Bar */}
       <div className="h-8 bg-gray-850 border-t border-gray-950 flex items-center px-4 gap-4 text-[10px] text-gray-500 justify-between">
-        <div className="flex items-center gap-4">
+        {store.editorMode === 'edit' ? (
+          <div className="flex items-center gap-3">
+            <span className="text-orange-400 font-bold uppercase">Edit Mode</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Tab</kbd> Object</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">1/2/3</kbd> Vert/Edge/Face</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">G/R/S</kbd> +<kbd className="bg-gray-700 px-1 rounded text-gray-300">X/Y/Z</kbd> Move/Rotate/Scale</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">E</kbd> Extrude</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">F</kbd> Face</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Alt+M</kbd> Merge</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">V</kbd> Weld</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">X</kbd> Delete</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">LMB</kbd> Confirm</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Esc</kbd> Cancel</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4">
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">LMB</kbd> Select</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">RMB</kbd> Orbit</span>
             <div className="w-px h-3 bg-gray-700 mx-1"></div>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Tab</kbd> Edit Mode</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">W/E/R</kbd> Transform</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+J</kbd> Join</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+D</kbd> Duplicate</span>
-            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Esc</kbd> Cancel</span>
-        </div>
+          </div>
+        )}
+
+        {/* Live readout while a modal transform is running */}
+        {store.modalTransform && (
+          <div className="px-2 py-0.5 bg-orange-600/20 border border-orange-600/50 rounded text-orange-400 font-mono">
+            {store.modalTransform.type.toUpperCase()}
+            {store.modalTransform.axis !== 'free' ? ` ${store.modalTransform.axis.toUpperCase()}` : ''}
+            {store.modalReadout
+              ? store.modalTransform.type === 'rotate'
+                ? ` ${store.modalReadout.amount.toFixed(1)}°`
+                : store.modalTransform.type === 'scale'
+                ? ` ×${store.modalReadout.amount.toFixed(3)}`
+                : ` ${((store.modalReadout.amount * getUnitFactor(store.unit)) | 0) / 1000} ${store.unit}`
+              : ''}
+            {store.modalReadout?.snapped ? ' · SNAPPED' : ''}
+          </div>
+        )}
         
         {/* Coordinate Input Bar */}
         <div className="flex-1 flex justify-center h-full py-0.5">
-            <CoordinateInputBar />
+            {store.editorMode === 'object' && <CoordinateInputBar />}
         </div>
       </div>
     </div>
