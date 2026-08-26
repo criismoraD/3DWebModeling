@@ -6,7 +6,7 @@ import { useAppStore } from '../store';
 import type { AxisLock, ModalTransform, SceneObject, SnapTarget, Vector3Data } from '../types';
 import { getRenderData } from './EditableMesh';
 import { applyMask, isConstrained, maskFromGizmoAxis, maskFromLock, moveWithConstraint } from './axisConstraint';
-import { elementsInRect as elementsInRectPure, pickElement } from './editPicking';
+import { elementsInRect as elementsInRectPure, pickElement, resolveClickSelection } from './editPicking';
 import type { AxisMask } from './axisConstraint';
 import { activeVertexIndices, selectionCenter } from '../editGeometry';
 import {
@@ -291,21 +291,9 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
         }
         // Blender style: dragging something that is already selected moves the
         // whole selection; dragging anything else re-selects just that element.
-        const current = useAppStore.getState().editSelection;
-        const index = parseInt(hit.key, 10);
-        const alreadySelected =
-          hit.kind === 'vertex'
-            ? current.vertices.includes(index)
-            : hit.kind === 'edge'
-            ? current.edges.includes(hit.key)
-            : current.faces.includes(index);
-
-        if (!alreadySelected) {
-          const field = hit.kind === 'edge' ? 'edges' : hit.kind === 'face' ? 'faces' : 'vertices';
-          const value = hit.kind === 'edge' ? [hit.key] : [index];
-          setEditSelection({ [field]: value } as any);
-        }
-        startDirectDrag(hit.kind === 'vertex' ? index : null, e.clientX, e.clientY);
+        const next = resolveClickSelection(useAppStore.getState().editSelection, hit);
+        if (next) setEditSelection(next);
+        startDirectDrag(hit.kind === 'vertex' ? parseInt(hit.key, 10) : null, e.clientX, e.clientY);
         return;
       }
       boxSelect.current = { x, y };

@@ -106,12 +106,12 @@ click (height/radius). Any of them can be converted into an editable mesh with `
 ```bash
 npm run test:geometry   # 24 tests on the mesh kernel
 npm run test:axis       # 13 tests on the axis constraint used by snapping
-npm run test:picking    # 15 tests on click -> element picking, with real three.js cameras
+npm run test:picking    # 19 tests on click -> element picking and click -> selection rules
 npm run test:store      # 15 tests driving the real store through the modelling workflows
 npm run test:workflow   #  8 tests for the snap-a-vertex-onto-another-object workflow
 ```
 
-`npm test` runs all five (75 groups).
+`npm test` runs all five (79 groups).
 
 The picking suite builds real perspective and orthographic cameras in Node — no WebGL — and
 covers what is easy to get wrong by eye: elements that overlap on screen resolve to the one

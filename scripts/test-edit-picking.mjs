@@ -299,6 +299,39 @@ test('a small rectangle selects only the vertices inside it', () => {
   assert.ok(sel.vertices.length < 8, 'the box grabbed the whole cube');
 });
 
+/* ------------------------- click -> selection rules ------------------------- */
+
+test('clicking an unselected element selects only that element', () => {
+  const current = { vertices: [1, 2], edges: [], faces: [] };
+  assert.deepEqual(P.resolveClickSelection(current, { kind: 'vertex', key: '5' }), {
+    vertices: [5], edges: [], faces: [],
+  });
+  assert.deepEqual(P.resolveClickSelection(current, { kind: 'edge', key: '3-4' }), {
+    vertices: [], edges: ['3-4'], faces: [],
+  });
+  assert.deepEqual(P.resolveClickSelection(current, { kind: 'face', key: '2' }), {
+    vertices: [], edges: [], faces: [2],
+  });
+});
+
+test('clicking an already selected element keeps the whole selection', () => {
+  const current = { vertices: [1, 2, 3], edges: [], faces: [] };
+  assert.equal(P.resolveClickSelection(current, { kind: 'vertex', key: '2' }), null,
+    'the selection must survive so the drag moves all of it');
+});
+
+test('clicking a selected edge or face also keeps the selection', () => {
+  assert.equal(P.resolveClickSelection({ vertices: [], edges: ['0-1', '1-2'], faces: [] }, { kind: 'edge', key: '1-2' }), null);
+  assert.equal(P.resolveClickSelection({ vertices: [], edges: [], faces: [0, 1] }, { kind: 'face', key: '0' }), null);
+});
+
+test('clicking a vertex outside a face selection switches to that vertex', () => {
+  const current = { vertices: [], edges: [], faces: [0, 1] };
+  assert.deepEqual(P.resolveClickSelection(current, { kind: 'vertex', key: '4' }), {
+    vertices: [4], edges: [], faces: [],
+  });
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   failures.forEach(({ name, err }) => console.error(`\n✗ ${name}\n  ${err.message}`));

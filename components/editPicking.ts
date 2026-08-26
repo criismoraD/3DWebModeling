@@ -167,3 +167,28 @@ export function elementsInRect(
 
   return { vertices, edges, faces };
 }
+
+/**
+ * Decides what a plain left click on an element does to the selection:
+ *   - the element is already selected -> keep the selection (a drag then moves
+ *     everything, like Blender)
+ *   - anything else -> select only that element
+ * Returns null when the selection must stay untouched.
+ */
+export function resolveClickSelection(
+  current: { vertices: number[]; edges: string[]; faces: number[] },
+  hit: { kind: SubObjectMode; key: string }
+): { vertices: number[]; edges: string[]; faces: number[] } | null {
+  const index = parseInt(hit.key, 10);
+  const alreadySelected =
+    hit.kind === 'vertex'
+      ? current.vertices.includes(index)
+      : hit.kind === 'edge'
+      ? current.edges.includes(hit.key)
+      : current.faces.includes(index);
+
+  if (alreadySelected) return null;
+  if (hit.kind === 'vertex') return { vertices: [index], edges: [], faces: [] };
+  if (hit.kind === 'edge') return { vertices: [], edges: [hit.key], faces: [] };
+  return { vertices: [], edges: [], faces: [index] };
+}
