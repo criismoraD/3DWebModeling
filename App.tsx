@@ -429,6 +429,26 @@ const activeVertexCountLabel = (obj: SceneObject | undefined, selection: { verti
   return `${n} vertex${n === 1 ? '' : 'es'} in the selection`;
 };
 
+/** Cuts an edge loop through the hovered (or selected) edge. */
+const LoopCutButton: React.FC = () => {
+  const { runEditOp, hoverElement, editSelection } = useAppStore();
+  const edge = hoverElement?.kind === 'edge' ? hoverElement.key : editSelection.edges[0];
+  return (
+    <button
+      onClick={() => edge && runEditOp({ type: 'loop-cut', edge, t: 0.5 })}
+      disabled={!edge}
+      title={edge ? 'Loop cut (Ctrl+R) - hover an edge first' : 'Hover or select an edge to cut a loop'}
+      className={`p-1.5 rounded-md border text-xs flex items-center gap-1 transition-colors ${
+        edge
+          ? 'bg-gray-750 text-gray-400 hover:bg-gray-700 hover:text-white border-gray-700'
+          : 'bg-gray-800 text-gray-600 border-gray-800 cursor-not-allowed'
+      }`}
+    >
+      <Spline size={14} />
+    </button>
+  );
+};
+
 /** Mirror axis picker. */
 const MirrorDropdown: React.FC = () => {
   const { runEditOp } = useAppStore();
@@ -513,7 +533,8 @@ const EditToolbar: React.FC = () => {
       <div className="w-px h-4 bg-gray-700 mx-1"></div>
       {btn('Extrude (E)', extrude, <Layers3 size={14} />, activeVertexCount(editSelection) === 0)}
       {btn('Create Face / Edge (F)', () => runEditOp({ type: 'create-face' }), <PenTool size={14} />, activeVertexCount(editSelection) < 2)}
-      {btn('Subdivide (Ctrl+R)', () => runEditOp({ type: 'subdivide', iterations: 1 }), <Grid2x2Icon />, false)}
+      <LoopCutButton />
+      {btn('Subdivide (Ctrl+Shift+R)', () => runEditOp({ type: 'subdivide', iterations: 1 }), <Grid2x2Icon />, false)}
       {btn('Inset faces (I)', () => runEditOp({ type: 'inset', amount: 0.2 }), <Square size={14} />, editSelection.faces.length === 0)}
       <MirrorDropdown />
       {btn('Triangulate (Ctrl+T)', () => runEditOp({ type: 'triangulate' }), <Triangle size={14} />, editSelection.faces.length === 0)}
@@ -1012,7 +1033,16 @@ export default function App() {
 
         if (isCtrl && key === 'z') { e.preventDefault(); st.undo(); return; }
         if (isCtrl && key === 'y') { e.preventDefault(); st.redo(); return; }
-        if (isCtrl && key === 'r') { e.preventDefault(); st.runEditOp({ type: 'subdivide', iterations: 1 }); return; }
+        if (isCtrl && key === 'r') {
+          e.preventDefault();
+          if (e.shiftKey) {
+            st.runEditOp({ type: 'subdivide', iterations: 1 });
+            return;
+          }
+          const edge = st.hoverElement?.kind === 'edge' ? st.hoverElement.key : st.editSelection.edges[0];
+          if (edge) st.runEditOp({ type: 'loop-cut', edge, t: 0.5 });
+          return;
+        }
         if (isCtrl && key === 't') { e.preventDefault(); st.runEditOp({ type: 'triangulate' }); return; }
         if (isCtrl && key === 'i') { e.preventDefault(); st.invertEditSelection(); return; }
         if (isCtrl && key === 'm') { e.preventDefault(); st.runEditOp({ type: 'mirror', axis: 'x' }); return; }
@@ -1169,6 +1199,7 @@ export default function App() {
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">E</kbd> Extrude</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">F</kbd> Face</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">I</kbd> Inset</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+R</kbd> Loop cut</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+M</kbd> Mirror</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Alt+M</kbd> Merge</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">V</kbd> Weld</span>

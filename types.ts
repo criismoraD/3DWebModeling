@@ -128,7 +128,8 @@ export type EditOperation =
   | { type: 'flip-normals' }
   | { type: 'triangulate' }
   | { type: 'inset'; amount: number }
-  | { type: 'mirror'; axis: 'x' | 'y' | 'z' };
+  | { type: 'mirror'; axis: 'x' | 'y' | 'z' }
+  | { type: 'loop-cut'; edge: string; t?: number };
 
 export interface EditOperationResult {
   mesh: MeshData;

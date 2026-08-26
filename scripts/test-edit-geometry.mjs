@@ -477,6 +477,101 @@ test('applyEditOperation routes inset and mirror', () => {
   assert.ok(mirror.mesh.faces.length >= 6);
 });
 
+/* ------------------------------ loop cut ------------------------------ */
+
+test('oppositeEdgeInFace follows quads and refuses triangles', () => {
+  const quad = [0, 1, 2, 3];
+  assert.deepEqual(G.oppositeEdgeInFace(quad, 0, 1).sort((a, b) => a - b), [2, 3]);
+  assert.deepEqual(G.oppositeEdgeInFace(quad, 1, 2).sort((a, b) => a - b), [0, 3]);
+  assert.equal(G.oppositeEdgeInFace([0, 1, 2], 0, 1), null, 'triangles have no opposite edge');
+  assert.equal(G.oppositeEdgeInFace([0, 1, 2, 3, 4], 0, 1), null, 'ngons are ambiguous');
+  assert.equal(G.oppositeEdgeInFace(quad, 0, 2), null, '0-2 is not an edge of the face');
+});
+
+test('findEdgeLoop walks the four edges around a cube', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const key = G.edgeKey(m.faces[0][0], m.faces[0][1]);
+  const loop = G.findEdgeLoop(m, key);
+  assert.equal(loop.length, 4, `a cube loop has 4 edges, got ${loop.length}`);
+  assert.equal(new Set(loop).size, 4, 'the loop repeated an edge');
+  assert.ok(loop.includes(key));
+});
+
+test('loop cut splits a cube into 10 faces and adds 4 vertices', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const before = m.faces.reduce((acc, f) => acc + faceArea(m, f), 0);
+  const key = G.edgeKey(m.faces[0][0], m.faces[0][1]);
+  const res = G.loopCut(m, key, 0.5);
+
+  assert.ok(res.changed);
+  assert.equal(res.mesh.vertices.length, 12, 'one new vertex per loop edge');
+  assert.equal(res.mesh.faces.length, 10, 'the 4 crossed faces become 8');
+  assert.equal(res.selection.vertices.length, 4);
+
+  const total = res.mesh.faces.reduce((acc, f) => acc + faceArea(res.mesh, f), 0);
+  assert.ok(near(total, before, 1e-6), `loop cut changed the surface area: ${total} != ${before}`);
+
+  res.mesh.faces.forEach((f, fi) => {
+    assert.ok(f.every(v => v >= 0 && v < res.mesh.vertices.length), `face ${fi} out of range`);
+    assert.ok(new Set(f).size >= 3, `face ${fi} degenerate`);
+  });
+});
+
+test('loop cut keeps every normal pointing outwards', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const key = G.edgeKey(m.faces[0][0], m.faces[0][1]);
+  const res = G.loopCut(m, key, 0.5);
+  res.mesh.faces.forEach((f, fi) => {
+    const n = G.polygonNormal(res.mesh, f);
+    const c = G.polygonCenter(res.mesh, f);
+    assert.ok(G.dotV(n, c) > 0, `face ${fi} flipped after the loop cut`);
+  });
+});
+
+test('loop cut at t=0.25 puts the new vertices a quarter along the edge', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const [a, b] = G.parseEdgeKey(G.edgeKey(m.faces[0][0], m.faces[0][1]));
+  const res = G.loopCut(m, G.edgeKey(a, b), 0.25);
+  const expected = G.addV(m.vertices[a], G.mulV(G.subV(m.vertices[b], m.vertices[a]), 0.25));
+  const found = res.selection.vertices
+    .map(i => res.mesh.vertices[i])
+    .some(v => G.sameV(v, expected, 1e-9));
+  assert.ok(found, `no vertex at ${JSON.stringify(expected)}`);
+});
+
+test('loop cut through a row of quads crosses every face of the strip', () => {
+  // 3x1 grid of quads on the XZ plane
+  const verts = [];
+  for (let i = 0; i <= 3; i++) {
+    verts.push({ x: i - 1.5, y: 0, z: -0.5 }, { x: i - 1.5, y: 0, z: 0.5 });
+  }
+  const faces = [];
+  for (let i = 0; i < 3; i++) faces.push([i * 2, i * 2 + 1, i * 2 + 3, i * 2 + 2]);
+  const strip = G.createMesh(verts, faces, []);
+
+  // the loop that runs along the strip follows the vertical edges
+  const loop = G.findEdgeLoop(strip, G.edgeKey(0, 1));
+  assert.equal(loop.length, 4, `expected the loop to cross the whole strip, got ${JSON.stringify(loop)}`);
+
+  const res = G.loopCut(strip, G.edgeKey(0, 1), 0.5);
+  assert.equal(res.mesh.faces.length, 6, 'each of the 3 quads is cut in two');
+  assert.equal(res.selection.vertices.length, 4, 'one vertex per edge of the loop');
+
+  // a horizontal edge only crosses its own face
+  const short = G.findEdgeLoop(strip, G.edgeKey(0, 2));
+  assert.equal(short.length, 2);
+});
+
+test('applyEditOperation routes loop-cut', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const key = G.edgeKey(m.faces[0][0], m.faces[0][1]);
+  const res = G.applyEditOperation(m, { vertices: [], edges: [key], faces: [] }, 'edge', {
+    type: 'loop-cut', edge: key, t: 0.5,
+  });
+  assert.ok(res.changed);
+  assert.equal(res.mesh.faces.length, 10);
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   failures.forEach(({ name, err }) => {

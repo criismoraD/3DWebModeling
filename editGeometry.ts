@@ -1174,6 +1174,135 @@ export function mirrorMesh(mesh: MeshData, axis: MirrorAxis, mergeThreshold = 1e
   };
 }
 
+/* ------------------------------ loop cut ------------------------------ */
+
+/**
+ * The edge opposite to (a,b) inside a quad face, which is what an edge loop
+ * follows. Returns null for triangles and ngons, where "opposite" is ambiguous.
+ */
+export function oppositeEdgeInFace(face: number[], a: number, b: number): [number, number] | null {
+  if (face.length !== 4) return null;
+  const ia = face.indexOf(a);
+  const ib = face.indexOf(b);
+  if (ia < 0 || ib < 0) return null;
+  const adjacent = (ia + 1) % 4 === ib || (ib + 1) % 4 === ia;
+  if (!adjacent) return null;
+  return [face[(ia + 2) % 4], face[(ib + 2) % 4]];
+}
+
+/** Walks the whole edge loop through `seedKey` (quad meshes only). */
+export function findEdgeLoop(mesh: MeshData, seedKey: string): string[] {
+  const edgeFaces = buildEdgeFaceMap(mesh);
+  const loop: string[] = [seedKey];
+
+  const walk = (forward: boolean) => {
+    let cur = seedKey;
+    for (let guard = 0; guard < mesh.faces.length * 4 + 4; guard++) {
+      const [a, b] = parseEdgeKey(cur);
+      let next: string | null = null;
+      for (const fi of edgeFaces.get(cur) || []) {
+        const opp = oppositeEdgeInFace(mesh.faces[fi], a, b);
+        if (!opp) continue;
+        const key = edgeKey(opp[0], opp[1]);
+        if (loop.includes(key)) continue;
+        next = key;
+        break;
+      }
+      if (!next) return;
+      if (forward) loop.push(next);
+      else loop.unshift(next);
+      cur = next;
+    }
+  };
+
+  walk(true);
+  walk(false);
+  return loop;
+}
+
+/**
+ * Cuts an edge loop: inserts a vertex on every edge of the loop at parameter `t`
+ * and splits each face the loop crosses into two, preserving winding.
+ */
+export function loopCut(mesh: MeshData, seedKey: string, t = 0.5): EditOperationResult {
+  const loop = findEdgeLoop(mesh, seedKey);
+  if (loop.length === 0) return { mesh, selection: emptySelection(), changed: false };
+
+  const out = cloneMesh(mesh);
+  const newVertexOnEdge = new Map<string, number>();
+  const cutAt = Math.max(0.001, Math.min(0.999, t));
+
+  loop.forEach(key => {
+    const [a, b] = parseEdgeKey(key);
+    const pa = out.vertices[a];
+    const pb = out.vertices[b];
+    if (!pa || !pb) return;
+    newVertexOnEdge.set(key, out.vertices.length);
+    out.vertices.push(addV(pa, mulV(subV(pb, pa), cutAt)));
+  });
+
+  const loopSet = new Set(loop);
+  const faces: number[][] = [];
+  const newFaces: number[][] = [];
+
+  out.faces.forEach(face => {
+    // edges of this face that the loop crosses, as edge indices
+    const crossed: number[] = [];
+    for (let i = 0; i < face.length; i++) {
+      const k = edgeKey(face[i], face[(i + 1) % face.length]);
+      if (loopSet.has(k) && newVertexOnEdge.has(k)) crossed.push(i);
+    }
+    if (crossed.length !== 2) {
+      faces.push(face.slice());
+      return;
+    }
+    const [p, q] = crossed[0] < crossed[1] ? crossed : [crossed[1], crossed[0]];
+    const mp = newVertexOnEdge.get(edgeKey(face[p], face[(p + 1) % face.length]))!;
+    const mq = newVertexOnEdge.get(edgeKey(face[q], face[(q + 1) % face.length]))!;
+
+    // two halves, both keeping the original winding
+    const a: number[] = [mp];
+    for (let i = p + 1; i <= q; i++) a.push(face[i]);
+    a.push(mq);
+
+    const b: number[] = [mq];
+    for (let i = q + 1; i < face.length + p + 1; i++) b.push(face[i % face.length]);
+    b.push(mp);
+
+    newFaces.push(a, b);
+  });
+
+  if (newFaces.length === 0) return { mesh, selection: emptySelection(), changed: false };
+
+  const firstNew = faces.length;
+  newFaces.forEach(f => faces.push(f));
+  out.faces = faces;
+  const faceRemap = sanitizeFaces(out);
+  sanitizeEdges(out);
+
+  const created: number[] = [];
+  for (let i = firstNew; i < firstNew + newFaces.length; i++) {
+    const mapped = faceRemap.get(i);
+    if (mapped !== undefined && mapped >= 0) created.push(mapped);
+  }
+  const edges = new Set<string>();
+  created.forEach(fi => {
+    const f = out.faces[fi];
+    if (!f) return;
+    f.forEach((v, i) => edges.add(edgeKey(v, f[(i + 1) % f.length])));
+  });
+
+  return {
+    mesh: out,
+    selection: {
+      vertices: Array.from(newVertexOnEdge.values()),
+      edges: Array.from(edges),
+      faces: created,
+    },
+    changed: true,
+  };
+}
+
 /* ------------------------------ create face ------------------------------ */
 
 function orderPlanar(points: Vector3Data[]): number[] {
@@ -1517,6 +1646,8 @@ export function applyEditOperation(
       return insetFaces(mesh, sel.faces, op.amount);
     case 'mirror':
       return mirrorMesh(mesh, op.axis);
+    case 'loop-cut':
+      return loopCut(mesh, op.edge, op.t ?? 0.5);
     default:
       return { mesh, selection: sel, changed: false };
   }
