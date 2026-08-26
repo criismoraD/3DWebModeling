@@ -429,6 +429,47 @@ const activeVertexCountLabel = (obj: SceneObject | undefined, selection: { verti
   return `${n} vertex${n === 1 ? '' : 'es'} in the selection`;
 };
 
+/** Mirror axis picker. */
+const MirrorDropdown: React.FC = () => {
+  const { runEditOp } = useAppStore();
+  const [isOpen, setIsOpen] = useState(false);
+  const axes: { axis: 'x' | 'y' | 'z'; label: string; color: string }[] = [
+    { axis: 'x', label: 'Mirror on X', color: 'text-red-400' },
+    { axis: 'y', label: 'Mirror on Y', color: 'text-green-400' },
+    { axis: 'z', label: 'Mirror on Z', color: 'text-blue-400' },
+  ];
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        title="Mirror the mesh (Ctrl+M)"
+        className="p-1.5 rounded-md bg-gray-750 text-gray-400 hover:bg-gray-700 hover:text-white border border-gray-700 flex items-center gap-1 text-xs"
+      >
+        <FlipHorizontal2 size={14} />
+      </button>
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)}></div>
+          <div className="absolute top-full right-0 mt-1 bg-gray-850 border border-gray-700 shadow-xl rounded w-44 z-50 py-1 flex flex-col">
+            {axes.map(a => (
+              <button
+                key={a.axis}
+                onClick={() => { setIsOpen(false); runEditOp({ type: 'mirror', axis: a.axis }); }}
+                className={`text-left px-3 py-1.5 hover:bg-gray-700 text-xs flex items-center gap-2 ${a.color}`}
+              >
+                <FlipHorizontal2 size={12} /> {a.label}
+              </button>
+            ))}
+            <div className="px-3 py-1 text-[10px] text-gray-500 border-t border-gray-700">
+              across the local plane, welding the seam
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 /** Edit-mode modelling tools. */
 const EditToolbar: React.FC = () => {
   const {
@@ -473,6 +514,8 @@ const EditToolbar: React.FC = () => {
       {btn('Extrude (E)', extrude, <Layers3 size={14} />, activeVertexCount(editSelection) === 0)}
       {btn('Create Face / Edge (F)', () => runEditOp({ type: 'create-face' }), <PenTool size={14} />, activeVertexCount(editSelection) < 2)}
       {btn('Subdivide (Ctrl+R)', () => runEditOp({ type: 'subdivide', iterations: 1 }), <Grid2x2Icon />, false)}
+      {btn('Inset faces (I)', () => runEditOp({ type: 'inset', amount: 0.2 }), <Square size={14} />, editSelection.faces.length === 0)}
+      <MirrorDropdown />
       {btn('Triangulate (Ctrl+T)', () => runEditOp({ type: 'triangulate' }), <Triangle size={14} />, editSelection.faces.length === 0)}
       {btn('Flip Normals (Shift+N)', () => runEditOp({ type: 'flip-normals' }), <FlipHorizontal2 size={14} />, editSelection.faces.length === 0)}
       <MergeDropdown />
@@ -972,6 +1015,7 @@ export default function App() {
         if (isCtrl && key === 'r') { e.preventDefault(); st.runEditOp({ type: 'subdivide', iterations: 1 }); return; }
         if (isCtrl && key === 't') { e.preventDefault(); st.runEditOp({ type: 'triangulate' }); return; }
         if (isCtrl && key === 'i') { e.preventDefault(); st.invertEditSelection(); return; }
+        if (isCtrl && key === 'm') { e.preventDefault(); st.runEditOp({ type: 'mirror', axis: 'x' }); return; }
         if (e.altKey && key === 'a') { e.preventDefault(); st.clearEditSelection(); return; }
         if (e.altKey && key === 'm') { e.preventDefault(); st.runEditOp({ type: 'merge', mode: 'center' }); return; }
 
@@ -991,6 +1035,7 @@ export default function App() {
             }
             break;
           case 'f': st.runEditOp({ type: 'create-face' }); break;
+          case 'i': if (st.editSelection.faces.length > 0) st.runEditOp({ type: 'inset', amount: 0.2 }); break;
           case 'x':
           case 'delete':
           case 'backspace': e.preventDefault(); st.runEditOp({ type: 'delete' }); break;
@@ -1123,6 +1168,8 @@ export default function App() {
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">G/R/S</kbd> +<kbd className="bg-gray-700 px-1 rounded text-gray-300">X/Y/Z</kbd> Move/Rotate/Scale</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">E</kbd> Extrude</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">F</kbd> Face</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">I</kbd> Inset</span>
+            <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Ctrl+M</kbd> Mirror</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">Alt+M</kbd> Merge</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">V</kbd> Weld</span>
             <span className="flex items-center gap-1"><kbd className="bg-gray-700 px-1 rounded text-gray-300">X</kbd> Delete</span>

@@ -1061,6 +1061,119 @@ export function subdivideFaces(mesh: MeshData, faceIndices: number[], iterations
   };
 }
 
+/* ------------------------------ inset ------------------------------ */
+
+/**
+ * Insets the selected faces: each face shrinks towards its own centre, leaving
+ * a ring of quads around a smaller inner face (Blender "I", individual mode).
+ * The inner faces stay selected so they can be extruded right away.
+ */
+export function insetFaces(mesh: MeshData, faceIndices: number[], amount: number): EditOperationResult {
+  const t = Math.max(0.0001, Math.min(0.999, amount));
+  const out = cloneMesh(mesh);
+  const targets = faceIndices.length > 0 ? faceIndices : out.faces.map((_, i) => i);
+  const innerFaces: number[][] = [];
+  const ringFaces: number[][] = [];
+
+  targets.forEach(fi => {
+    const face = out.faces[fi];
+    if (!face || face.length < 3) return;
+    let center = vec(0, 0, 0);
+    face.forEach(v => (center = addV(center, out.vertices[v])));
+    center = mulV(center, 1 / face.length);
+
+    const inner: number[] = [];
+    face.forEach(v => {
+      const p = out.vertices[v];
+      inner.push(out.vertices.length);
+      out.vertices.push(addV(p, mulV(subV(center, p), t)));
+    });
+
+    // same winding as the original face
+    innerFaces.push(inner.slice());
+    for (let i = 0; i < face.length; i++) {
+      const next = (i + 1) % face.length;
+      ringFaces.push([face[i], face[next], inner[next], inner[i]]);
+    }
+  });
+
+  if (innerFaces.length === 0) return { mesh, selection: { vertices: [], edges: [], faces: faceIndices.slice() }, changed: false };
+
+  ringFaces.forEach(f => out.faces.push(f));
+  innerFaces.forEach(f => out.faces.push(f));
+
+  // the inset faces replace the originals, like Blender does
+  const replaced = new Set(targets);
+  const faces: number[][] = [];
+  out.faces.forEach((f, i) => {
+    if (!replaced.has(i)) faces.push(f);
+  });
+  out.faces = faces;
+  const faceRemap = sanitizeFaces(out);
+  sanitizeEdges(out);
+
+  // the inner faces were appended last, so recover their indices after sanitizing
+  const innerSel = remapFaceSelection(
+    faces.map((_, i) => i).filter(i => i >= faces.length - innerFaces.length),
+    faceRemap
+  );
+
+  const verts = new Set<number>();
+  innerSel.forEach(fi => out.faces[fi]?.forEach(v => verts.add(v)));
+  return {
+    mesh: out,
+    selection: { vertices: Array.from(verts), edges: [], faces: innerSel.filter(fi => out.faces[fi]) },
+    changed: true,
+  };
+}
+
+/* ------------------------------ mirror ------------------------------ */
+
+export type MirrorAxis = 'x' | 'y' | 'z';
+
+/**
+ * Mirrors the mesh across the plane `axis = 0` of its local space and welds the
+ * vertices that land on the plane, so the result is a single watertight mesh.
+ * Mirrored faces get reversed winding to keep the normals pointing outwards.
+ */
+export function mirrorMesh(mesh: MeshData, axis: MirrorAxis, mergeThreshold = 1e-6): EditOperationResult {
+  const out = cloneMesh(mesh);
+  const mirroredIndexOf = new Map<number, number>();
+
+  mesh.vertices.forEach((p, i) => {
+    if (Math.abs(p[axis]) < mergeThreshold) {
+      mirroredIndexOf.set(i, i); // on the plane: shared, not duplicated
+      return;
+    }
+    const q = cloneV(p);
+    q[axis] = -q[axis];
+    mirroredIndexOf.set(i, out.vertices.length);
+    out.vertices.push(q);
+  });
+
+  const newFaces: number[][] = [];
+  mesh.faces.forEach(face => {
+    // reversed winding keeps the normal pointing away from the mirrored side
+    newFaces.push(face.slice().reverse().map(v => mirroredIndexOf.get(v)!));
+  });
+  mesh.edges.forEach(([a, b]) => {
+    const ma = mirroredIndexOf.get(a)!;
+    const mb = mirroredIndexOf.get(b)!;
+    if (ma !== mb) out.edges.push([ma, mb]);
+  });
+
+  newFaces.forEach(f => out.faces.push(f));
+  const welded = weldMeshWithRemap(out, mergeThreshold);
+  const allFaces = welded.mesh.faces.map((_, i) => i);
+  const verts = new Set<number>();
+  allFaces.forEach(fi => welded.mesh.faces[fi].forEach(v => verts.add(v)));
+  return {
+    mesh: welded.mesh,
+    selection: { vertices: Array.from(verts), edges: [], faces: allFaces },
+    changed: true,
+  };
+}
+
 /* ------------------------------ create face ------------------------------ */
 
 function orderPlanar(points: Vector3Data[]): number[] {
@@ -1400,6 +1513,10 @@ export function applyEditOperation(
       return flipNormals(mesh, sel.faces);
     case 'triangulate':
       return triangulateFaces(mesh, sel.faces);
+    case 'inset':
+      return insetFaces(mesh, sel.faces, op.amount);
+    case 'mirror':
+      return mirrorMesh(mesh, op.axis);
     default:
       return { mesh, selection: sel, changed: false };
   }

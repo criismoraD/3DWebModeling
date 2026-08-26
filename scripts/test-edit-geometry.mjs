@@ -364,6 +364,119 @@ test('applyEditOperation routes every op kind', () => {
   });
 });
 
+/* ------------------------------ inset / mirror ------------------------------ */
+
+const faceArea = (mesh, face) => {
+  const pts = face.map(i => mesh.vertices[i]);
+  return G.triangulatePolygon(pts).reduce(
+    (a, [p, q, r]) => a + G.lenV(G.crossV(G.subV(pts[q], pts[p]), G.subV(pts[r], pts[p]))) / 2,
+    0
+  );
+};
+
+test('inset shrinks a face and keeps the total area', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const before = faceArea(m, m.faces[0]);
+  const res = G.insetFaces(m, [0], 0.5);
+
+  assert.ok(res.changed);
+  // 1 original face becomes 1 inner + 4 ring quads
+  assert.equal(res.mesh.faces.length, 6 - 1 + 5);
+  assert.equal(res.selection.faces.length, 1, 'only the inner face stays selected');
+
+  const inner = res.mesh.faces[res.selection.faces[0]];
+  assert.equal(inner.length, 4);
+  assert.ok(near(faceArea(res.mesh, inner), before * 0.25, 1e-6),
+    `inner face area ${faceArea(res.mesh, inner)} != ${before * 0.25}`);
+
+  // inner face + the 4 ring quads must cover exactly the original face
+  const produced = res.mesh.faces.slice(5);
+  const total = produced.reduce((acc, f) => acc + faceArea(res.mesh, f), 0);
+  assert.ok(near(total, before, 1e-6), `inset changed the area: ${total} != ${before}`);
+  res.mesh.faces.forEach(f => f.forEach(v => assert.ok(v >= 0 && v < res.mesh.vertices.length)));
+});
+
+test('inset keeps the winding of the original face', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const before = G.polygonNormal(m, m.faces[0]);
+  const res = G.insetFaces(m, [0], 0.5);
+  const after = G.polygonNormal(res.mesh, res.mesh.faces[res.selection.faces[0]]);
+  assert.ok(G.dotV(before, after) > 0.99, 'the inner face flipped its normal');
+});
+
+test('inset without a face selection insets every face', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const res = G.insetFaces(m, [], 0.3);
+  assert.equal(res.mesh.faces.length, 6 * 5);
+});
+
+test('mirror duplicates the mesh and welds the seam', () => {
+  // a half box sitting on the x=0 plane
+  const m = G.createMesh(
+    [
+      { x: 0, y: -0.5, z: -0.5 }, { x: 1, y: -0.5, z: -0.5 },
+      { x: 1, y: 0.5, z: -0.5 }, { x: 0, y: 0.5, z: -0.5 },
+      { x: 0, y: -0.5, z: 0.5 }, { x: 1, y: -0.5, z: 0.5 },
+      { x: 1, y: 0.5, z: 0.5 }, { x: 0, y: 0.5, z: 0.5 },
+    ],
+    [
+      [0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4],
+      [3, 7, 6, 2], [1, 2, 6, 5], [0, 4, 7, 3],
+    ],
+    []
+  );
+  const res = G.mirrorMesh(m, 'x');
+  const bounds = G.meshBounds(res.mesh);
+
+  assert.ok(near(bounds.min.x, -1, 1e-6) && near(bounds.max.x, 1, 1e-6),
+    `mirrored bounds ${bounds.min.x}..${bounds.max.x}, expected -1..1`);
+  // the 4 vertices on the plane are shared, the other 4 are duplicated
+  assert.equal(res.mesh.vertices.length, 12);
+  // the cap lying on the mirror plane mirrors onto itself, so it is not doubled
+  assert.equal(res.mesh.faces.length, 11);
+  res.mesh.faces.forEach(f => {
+    assert.ok(f.every(v => v >= 0 && v < res.mesh.vertices.length));
+    assert.ok(new Set(f).size >= 3, 'mirror produced a degenerate face');
+  });
+});
+
+test('mirroring an open half box closes it with outward normals', () => {
+  // a box with the -X cap removed, sitting so the open side lies on x = 0
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const open = G.createMesh(
+    m.vertices.map(v => ({ x: v.x + 0.5, y: v.y, z: v.z })),
+    m.faces.filter((_, i) => i !== 5).map(f => f.slice()), // drop the -X cap
+    []
+  );
+  const res = G.mirrorMesh(open, 'x');
+  const bounds = G.meshBounds(res.mesh);
+
+  assert.ok(near(bounds.min.x, -1, 1e-6) && near(bounds.max.x, 1, 1e-6),
+    `expected a 2x1x1 solid, got ${bounds.min.x}..${bounds.max.x}`);
+  assert.equal(res.mesh.vertices.length, 12, '4 shared on the plane + 8 mirrored');
+  assert.equal(res.mesh.faces.length, 10, '5 faces each side, no cap on the plane');
+
+  // every normal of the closed solid must point away from its centre
+  res.mesh.faces.forEach((f, fi) => {
+    const n = G.polygonNormal(res.mesh, f);
+    const c = G.polygonCenter(res.mesh, f);
+    assert.ok(G.dotV(n, { x: -c.x, y: -c.y, z: -c.z }) < -0.1,
+      `face ${fi} normal points inwards after mirroring`);
+  });
+});
+
+test('applyEditOperation routes inset and mirror', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const sel = { vertices: [], edges: [], faces: [0] };
+  const inset = G.applyEditOperation(m, sel, 'face', { type: 'inset', amount: 0.4 });
+  assert.ok(inset.changed);
+  assert.equal(inset.mesh.faces.length, 10);
+
+  const mirror = G.applyEditOperation(m, { vertices: [], edges: [], faces: [] }, 'face', { type: 'mirror', axis: 'y' });
+  assert.ok(mirror.changed);
+  assert.ok(mirror.mesh.faces.length >= 6);
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   failures.forEach(({ name, err }) => {

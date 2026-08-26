@@ -39,6 +39,8 @@ connected/linked mesh, `[` / `]` to shrink / grow, `Ctrl+I` to invert, `A` all, 
 | `E` | extrude (faces → cap + side walls, edges → quad, vertices → loose edge) and immediately move |
 | `F` | create a face from 3+ vertices, an edge from 2, or a face from a closed edge loop |
 | `Ctrl+R` | subdivide (quad → 4 quads, triangle → 4 triangles) |
+| `I` | inset the selected faces (smaller inner face + ring of quads) |
+| `Ctrl+M` | mirror across the local X plane (toolbar also offers Y and Z), welding the seam |
 | `Ctrl+T` | triangulate |
 | `Alt+M` | merge / weld the selection (at center, at target, at first, at last, or by distance) |
 | `V` | weld by distance (removes duplicated vertices) |
@@ -104,14 +106,14 @@ click (height/radius). Any of them can be converted into an editable mesh with `
 ## Tests
 
 ```bash
-npm run test:geometry   # 24 tests on the mesh kernel
+npm run test:geometry   # 30 tests on the mesh kernel (incl. inset and mirror)
 npm run test:axis       # 13 tests on the axis constraint used by snapping
 npm run test:picking    # 19 tests on click -> element picking and click -> selection rules
 npm run test:store      # 15 tests driving the real store through the modelling workflows
 npm run test:workflow   #  8 tests for the snap-a-vertex-onto-another-object workflow
 ```
 
-`npm test` runs all five (79 groups).
+`npm test` runs all five (85 groups).
 
 The picking suite builds real perspective and orthographic cameras in Node — no WebGL — and
 covers what is easy to get wrong by eye: elements that overlap on screen resolve to the one

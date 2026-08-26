@@ -126,7 +126,9 @@ export type EditOperation =
   | { type: 'create-face' }
   | { type: 'delete-loose' }
   | { type: 'flip-normals' }
-  | { type: 'triangulate' };
+  | { type: 'triangulate' }
+  | { type: 'inset'; amount: number }
+  | { type: 'mirror'; axis: 'x' | 'y' | 'z' };
 
 export interface EditOperationResult {
   mesh: MeshData;
