@@ -49,22 +49,38 @@ connected/linked mesh, `[` / `]` to shrink / grow, `Ctrl+I` to invert, `A` all, 
 
 The transform gizmo works in Edit Mode too and moves/rotates/scales the sub-object selection.
 
-## Snapping: pick the source vertex, drop it on a target
+## Snapping: grab a vertex, drop it on another one
 
 The magnet in the toolbar (`S` in Object Mode) enables snapping. Options: **grid points**,
 **vertex**, **edge midpoint**, **weld on drop** and a screen-space **radius** in pixels.
 
-The flow that the snapping is built around:
+Markers: **yellow ring** = the vertex you are about to grab · **blue dot** = the snap source
+during the drag · **pink dot** = the target it is sticking to · **green dot** = a grid point.
 
-1. Hover a vertex of the selection — it highlights green. That vertex becomes the **snap
-   source** (blue marker) when the drag starts, so you decide *which* corner you are grabbing
-   instead of always moving from the pivot.
-2. Drag with the gizmo, or press `G`. The source vertex sticks to the nearest target vertex /
-   midpoint / grid point under the cursor (yellow marker).
-3. Release. With **weld on drop** enabled, a source vertex snapped onto a vertex of the *same*
-   mesh is merged into it, so the two become a single watertight vertex.
+### Grabbing from a vertex
 
-To weld across two different objects, join them first with `Ctrl+J` and then snap + drop.
+Hover any vertex of the selected mesh: a yellow ring appears over it. **Press and drag that
+ring** — the selection moves from that vertex (not from the pivot), and it sticks to the
+nearest vertex / midpoint / grid point under the cursor. Releasing the button confirms; a
+click without moving is just a selection.
+
+The same works from the gizmo: hover a vertex first and the gizmo drag will use it as the
+snap source. `G` also starts the move from the vertex closest to the cursor.
+
+With **weld on drop** enabled, a source vertex snapped onto a vertex of the *same* mesh is
+merged into it, so the two become a single watertight vertex. To weld across two different
+objects, join them first with `Ctrl+J` and then snap + drop.
+
+### Axis constraints
+
+Snapping respects the active constraint, so a locked axis never drags the others along:
+
+- Gizmo: drag the **X arrow** and the snap only changes X (the XY/XZ/YZ squares move two axes,
+  the centre ball moves all three).
+- Modal transform: `G` then `X`, `Y` or `Z` locks that axis; press it again to go back to free.
+  The locked axes keep their exact value even while the source is snapped to a target.
+
+`components/axisConstraint.ts` holds that logic and is unit tested (`npm run test:axis`).
 
 ## Primitives
 
@@ -82,11 +98,13 @@ click (height/radius). Any of them can be converted into an editable mesh with `
 | `components/EditModeController.tsx` | edit-mode picking, box select, gizmo, modal transforms, snap markers |
 | `components/EditableMesh.tsx` | mesh surface, wireframe and sub-object overlays |
 | `components/snapping.ts` | world/screen projection, snap target gathering and queries |
+| `components/axisConstraint.ts` | axis masks: keeps a snap from moving locked axes |
 
 ## Tests
 
 ```bash
 npm run test:geometry   # 24 tests on the mesh kernel
+npm run test:axis       # 8 tests on the axis constraint used by snapping
 npm run test:store      # 15 tests driving the real store through the modelling workflows
 ```
 

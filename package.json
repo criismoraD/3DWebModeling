@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test:geometry": "tsc editGeometry.ts types.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-geometry.mjs",
     "test:store": "tsc store.ts editGeometry.ts types.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-edit-store.mjs",
-    "test": "npm run test:geometry && npm run test:store"
+    "test": "npm run test:geometry && npm run test:axis && npm run test:store",
+    "test:axis": "tsc editGeometry.ts types.ts components/axisConstraint.ts --outDir .tmp-test --module commonjs --target es2022 --moduleResolution node --skipLibCheck && node -e \"require('fs').writeFileSync('.tmp-test/package.json','{\\\"type\\\":\\\"commonjs\\\"}')\" && node scripts/test-axis-constraint.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useThree } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { TransformControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { useAppStore } from '../store';
 import type { AxisLock, ModalTransform, SceneObject, SnapTarget, Vector3Data } from '../types';
 import { getRenderData } from './EditableMesh';
+import { applyMask, maskFromGizmoAxis, maskFromLock } from './axisConstraint';
+import type { AxisMask } from './axisConstraint';
 import {
   activeVertexIndices,
   edgeKey,
@@ -28,6 +30,50 @@ const AXIS_VECTORS: Record<Exclude<AxisLock, 'free'>, THREE.Vector3> = {
   x: new THREE.Vector3(1, 0, 0),
   y: new THREE.Vector3(0, 1, 0),
   z: new THREE.Vector3(0, 0, 1),
+};
+
+/**
+ * Component mask of the active constraint: 1 on the axes that may move, 0 on the
+ * locked ones. `null` means free (no constraint). Lives in axisConstraint.ts so
+ * it can be unit tested.
+ */
+
+/**
+ * Clickable "grab from here" handle drawn over the hovered vertex. It keeps a
+ * constant pixel size in every viewport (perspective and ortho) and always
+ * faces the camera, so it reads as a UI icon rather than as geometry.
+ */
+const GrabHandle: React.FC<{ position: THREE.Vector3; color?: string }> = ({ position, color = '#ffd400' }) => {
+  const group = useRef<THREE.Group>(null);
+
+  useFrame(({ camera, size }) => {
+    const g = group.current;
+    if (!g) return;
+    let worldPerPixel: number;
+    if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+      const dist = camera.position.distanceTo(position);
+      const fov = ((camera as THREE.PerspectiveCamera).fov * Math.PI) / 180;
+      worldPerPixel = (2 * Math.tan(fov / 2) * dist) / Math.max(1, size.height);
+    } else {
+      worldPerPixel = 1 / Math.max(1e-6, (camera as THREE.OrthographicCamera).zoom);
+    }
+    const px = worldPerPixel * 17;
+    g.scale.set(px, px, px);
+    g.quaternion.copy(camera.quaternion);
+  });
+
+  return (
+    <group ref={group} position={position}>
+      <mesh renderOrder={960}>
+        <ringGeometry args={[0.34, 0.5, 28]} />
+        <meshBasicMaterial color={color} depthTest={false} transparent opacity={0.95} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+      <mesh renderOrder={961}>
+        <circleGeometry args={[0.15, 16]} />
+        <meshBasicMaterial color={color} depthTest={false} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+    </group>
+  );
 };
 
 interface DragState {
@@ -322,9 +368,16 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
 
       const hit = pick(x, y);
       if (hit) {
-        if (e.shiftKey || e.ctrlKey || e.metaKey) toggleEditElement(hit.kind, hit.key);
-        else if (hit.kind === subObjectMode) setEditSelection({ [hit.kind === 'edge' ? 'edges' : hit.kind === 'face' ? 'faces' : 'vertices']: hit.kind === 'edge' ? [hit.key] : [parseInt(hit.key, 10)] } as any);
-        else setEditSelection({ [hit.kind === 'edge' ? 'edges' : hit.kind === 'face' ? 'faces' : 'vertices']: hit.kind === 'edge' ? [hit.key] : [parseInt(hit.key, 10)] } as any);
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+          toggleEditElement(hit.kind, hit.key);
+          return;
+        }
+        // Blender style: a click selects, a drag grabs the element right there
+        // and moves it (from the vertex you clicked, not from the pivot).
+        const field = hit.kind === 'edge' ? 'edges' : hit.kind === 'face' ? 'faces' : 'vertices';
+        const value = hit.kind === 'edge' ? [hit.key] : [parseInt(hit.key, 10)];
+        setEditSelection({ [field]: value } as any);
+        startDirectDrag(hit.kind === 'vertex' ? parseInt(hit.key, 10) : null, e.clientX, e.clientY);
         return;
       }
       boxSelect.current = { x, y };
@@ -407,8 +460,16 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
     return state;
   };
 
-  /** Snaps the moving selection so `sourceVertex` lands on the best target. */
-  const computeSnapShift = (movedWorld: Map<number, THREE.Vector3>, sourceVertex: number | null): { shift: THREE.Vector3; target: SnapTarget | null } => {
+  /**
+   * Snaps the moving selection so `sourceVertex` lands on the best target.
+   * The returned shift is projected onto `mask`, so a constrained axis never
+   * drags the other two along with it.
+   */
+  const computeSnapShift = (
+    movedWorld: Map<number, THREE.Vector3>,
+    sourceVertex: number | null,
+    mask: AxisMask = null
+  ): { shift: THREE.Vector3; target: SnapTarget | null } => {
     const px = pointerPx.current.x;
     const py = pointerPx.current.y;
     const source = sourceVertex !== null ? movedWorld.get(sourceVertex) : null;
@@ -416,13 +477,14 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
 
     const target = querySnap(probe, px, py, true);
     if (target) {
-      const targetPoint = toVec3(target.point);
-      return { shift: targetPoint.sub(probe), target };
+      const masked = applyMask(toVec3(target.point).sub(probe), mask);
+      return { shift: new THREE.Vector3(masked.x, masked.y, masked.z), target };
     }
     const gridShift = gridSnapShift(probe);
     if (gridShift) {
+      const masked = applyMask(gridShift, mask);
       return {
-        shift: gridShift,
+        shift: new THREE.Vector3(masked.x, masked.y, masked.z),
         target: {
           kind: 'grid',
           point: { x: probe.x + gridShift.x, y: probe.y + gridShift.y, z: probe.z + gridShift.z },
@@ -432,6 +494,31 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       };
     }
     return { shift: new THREE.Vector3(), target: null };
+  };
+
+  /**
+   * Grabs the element under the cursor and moves it until the button is
+   * released. A click without movement behaves as a plain selection.
+   */
+  const startDirectDrag = (sourceVertex: number | null, clientX: number, clientY: number) => {
+    if (!editObjectId) return;
+    setModalTransform({
+      type: 'move',
+      axis: 'free',
+      objectId: editObjectId,
+      sourceVertex,
+      amount: 0,
+      snapped: false,
+    });
+
+    const onRelease = (up: PointerEvent) => {
+      window.removeEventListener('pointerup', onRelease);
+      const moved = Math.hypot(up.clientX - clientX, up.clientY - clientY);
+      // below the threshold it was a click, not a drag: revert the transform
+      if (moved < 4) modalApi.current?.cancel();
+      else modalApi.current?.commit();
+    };
+    window.addEventListener('pointerup', onRelease);
   };
 
   /** Live gizmo drag: applies the anchor delta to the selected vertices. */
@@ -448,7 +535,11 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       });
     }
 
-    const { shift, target } = computeSnapShift(movedWorld, state.sourceVertex);
+    // rotate/scale gizmos must not be translated by the snap
+    const isTranslate = useAppStore.getState().transformMode === 'translate';
+    const { shift, target } = isTranslate
+      ? computeSnapShift(movedWorld, state.sourceVertex, maskFromGizmoAxis(transformRef.current?.axis))
+      : { shift: new THREE.Vector3(), target: null };
     setSnapTarget(target);
     state.snapped = !!target;
 
@@ -608,11 +699,11 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       };
       project(delta);
 
-      const snap = computeSnapShift(movedWorld, state.sourceVertex);
+      const snap = computeSnapShift(movedWorld, state.sourceVertex, maskFromLock(axisLock));
       snapped = !!snap.target;
       setSnapTarget(snap.target);
       if (snap.target) {
-        delta = delta.add(snap.shift);
+        delta = delta.add(snap.shift); // already masked: locked axes keep their value
         amount = delta.length();
         project(delta);
       }
@@ -663,7 +754,11 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
 
   const commitModal = () => {
     const state = drag.current;
-    if (!state) return;
+    if (!state) {
+      // released before the drag was even initialised: nothing to commit
+      setModalTransform(null);
+      return;
+    }
     const payload: Record<number, Vector3Data> = {};
     const live = useAppStore.getState().objects.find(o => o.id === editObjectId)?.mesh;
     state.originals.forEach((_, i) => {
@@ -679,7 +774,10 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
 
   const cancelModal = () => {
     const state = drag.current;
-    if (!state) return;
+    if (!state) {
+      setModalTransform(null);
+      return;
+    }
     applyPositions(state.originals, false);
     drag.current = null;
     setSnapSourceVertex(null);
@@ -781,6 +879,10 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
         visible={activeVerts.length > 0 && !modalTransform}
       />
 
+      {hoverElement && hoverElement.kind === 'vertex' && !modalTransform && !drag.current && (
+        <GrabHandle position={toVec3(hoverElement.point)} />
+      )}
+
       {sourceWorld && (
         <mesh position={sourceWorld} renderOrder={950}>
           <sphereGeometry args={[0.004 + markerScale * 0.4, 12, 12]} />
@@ -792,7 +894,7 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
         <mesh position={toVec3(snapTarget.point)} renderOrder={951}>
           <sphereGeometry args={[0.005 + markerScale * 0.5, 12, 12]} />
           <meshBasicMaterial
-            color={snapTarget.kind === 'grid' ? '#9be564' : '#ffd400'}
+            color={snapTarget.kind === 'grid' ? '#9be564' : '#ff5bd0'}
             depthTest={false}
             transparent
             opacity={0.95}
