@@ -6,21 +6,13 @@ import { useAppStore } from '../store';
 import type { AxisLock, ModalTransform, SceneObject, SnapTarget, Vector3Data } from '../types';
 import { getRenderData } from './EditableMesh';
 import { applyMask, isConstrained, maskFromGizmoAxis, maskFromLock } from './axisConstraint';
+import { elementsInRect as elementsInRectPure, pickElement } from './editPicking';
 import type { AxisMask } from './axisConstraint';
+import { activeVertexIndices, selectionCenter } from '../editGeometry';
 import {
-  activeVertexIndices,
-  edgeKey,
-  faceEdges,
-  parseEdgeKey,
-  polygonCenter,
-  selectionCenter,
-} from '../editGeometry';
-import {
-  distanceToSegment,
   findNearestCandidate,
   gatherSnapCandidates,
   objectMatrix,
-  pointInTriangle,
   projectToScreen,
   snapPointToGrid,
   toVec3,
@@ -223,106 +215,29 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
 
   /* ---------------- picking ---------------- */
 
+  const pickContext = () => ({
+    mesh: mesh!,
+    worldVertices,
+    renderData: renderData!,
+    camera,
+    width: size.width,
+    height: size.height,
+    mode: subObjectMode,
+    radiusPx: snapSettings.radiusPx,
+  });
+
   const pick = (px: number, py: number) => {
-    if (!mesh || !matrices || !renderData) return null;
-    const radius = Math.max(6, snapSettings.radiusPx);
-
-    // vertices
-    let bestVertex: { key: string; dist: number; point: THREE.Vector3 } | null = null;
-    worldVertices.forEach((wp, i) => {
-      const s = projectToScreen(wp, camera, size.width, size.height);
-      if (!s) return;
-      const d = Math.hypot(s.x - px, s.y - py);
-      if (d > radius) return;
-      if (!bestVertex || d < bestVertex.dist) bestVertex = { key: String(i), dist: d, point: wp };
-    });
-
-    // edges
-    const edgeKeys = new Set<string>();
-    mesh.faces.forEach(f => faceEdges(f).forEach(([a, b]) => edgeKeys.add(edgeKey(a, b))));
-    mesh.edges.forEach(([a, b]) => edgeKeys.add(edgeKey(a, b)));
-
-    let bestEdge: { key: string; dist: number; point: THREE.Vector3 } | null = null;
-    edgeKeys.forEach(key => {
-      const [a, b] = parseEdgeKey(key);
-      const pa = worldVertices[a];
-      const pb = worldVertices[b];
-      if (!pa || !pb) return;
-      const sa = projectToScreen(pa, camera, size.width, size.height);
-      const sb = projectToScreen(pb, camera, size.width, size.height);
-      if (!sa || !sb) return;
-      const d = distanceToSegment(px, py, sa.x, sa.y, sb.x, sb.y);
-      if (d > radius) return;
-      if (!bestEdge || d < bestEdge.dist) {
-        bestEdge = { key, dist: d, point: pa.clone().add(pb).multiplyScalar(0.5) };
-      }
-    });
-
-    // faces
-    let bestFace: { key: string; depth: number; point: THREE.Vector3 } | null = null;
-    if (subObjectMode === 'face') {
-      renderData.triangles.forEach((tri, ti) => {
-        const faceIndex = renderData!.faceOfTriangle[ti];
-        const pts = tri.map(i => worldVertices[i]);
-        const sp = pts.map(p => projectToScreen(p, camera, size.width, size.height));
-        if (sp.some(s => !s)) return;
-        const [a, b, c] = sp as { x: number; y: number; depth: number }[];
-        if (!pointInTriangle(px, py, a.x, a.y, b.x, b.y, c.x, c.y)) return;
-        const depth = (a.depth + b.depth + c.depth) / 3;
-        if (!bestFace || depth < bestFace.depth) {
-          const center = polygonCenter(mesh!, mesh!.faces[faceIndex]);
-          bestFace = { key: String(faceIndex), depth, point: toWorld(center) };
-        }
-      });
-    }
-
-    if (subObjectMode === 'vertex' && bestVertex) return { kind: 'vertex' as const, ...bestVertex };
-    if (subObjectMode === 'edge') {
-      if (bestEdge) return { kind: 'edge' as const, ...bestEdge };
-      if (bestVertex) return { kind: 'vertex' as const, ...bestVertex };
-      return null;
-    }
-    if (bestFace) return { kind: 'face' as const, ...bestFace };
-    if (bestEdge) return { kind: 'edge' as const, ...bestEdge };
-    if (bestVertex) return { kind: 'vertex' as const, ...bestVertex };
-    return null;
+    if (!mesh || !renderData) return null;
+    const hit = pickElement(pickContext(), px, py);
+    return hit ? { kind: hit.kind, key: hit.key, point: new THREE.Vector3(hit.point.x, hit.point.y, hit.point.z) } : null;
   };
 
   /* ---------------- box selection ---------------- */
 
   const elementsInRect = (x0: number, y0: number, x1: number, y1: number) => {
     if (!mesh || !renderData) return null;
-    const left = Math.min(x0, x1), right = Math.max(x0, x1);
-    const top = Math.min(y0, y1), bottom = Math.max(y0, y1);
-    const inside = (s: { x: number; y: number }) => s.x >= left && s.x <= right && s.y >= top && s.y <= bottom;
-
-    const vertices: number[] = [];
-    worldVertices.forEach((wp, i) => {
-      const s = projectToScreen(wp, camera, size.width, size.height);
-      if (s && inside(s)) vertices.push(i);
-    });
-
-    const edgeKeys = new Set<string>();
-    mesh.faces.forEach(f => faceEdges(f).forEach(([a, b]) => edgeKeys.add(edgeKey(a, b))));
-    mesh.edges.forEach(([a, b]) => edgeKeys.add(edgeKey(a, b)));
-    const edges: string[] = [];
-    edgeKeys.forEach(key => {
-      const [a, b] = parseEdgeKey(key);
-      const sa = projectToScreen(worldVertices[a], camera, size.width, size.height);
-      const sb = projectToScreen(worldVertices[b], camera, size.width, size.height);
-      if (!sa || !sb) return;
-      const mid = { x: (sa.x + sb.x) / 2, y: (sa.y + sb.y) / 2 };
-      if (inside(mid)) edges.push(key);
-    });
-
-    const faces: number[] = [];
-    mesh.faces.forEach((face, fi) => {
-      const center = polygonCenter(mesh, face);
-      const s = projectToScreen(toWorld(center), camera, size.width, size.height);
-      if (s && inside(s)) faces.push(fi);
-    });
-
-    return { vertices, edges, faces };
+    const { mode, radiusPx, ...rest } = pickContext();
+    return elementsInRectPure(rest, x0, y0, x1, y1);
   };
 
   /* ---------------- DOM input ---------------- */

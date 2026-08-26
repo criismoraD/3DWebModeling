@@ -99,14 +99,21 @@ click (height/radius). Any of them can be converted into an editable mesh with `
 | `components/EditableMesh.tsx` | mesh surface, wireframe and sub-object overlays |
 | `components/snapping.ts` | world/screen projection, snap target gathering and queries |
 | `components/axisConstraint.ts` | axis masks: keeps a snap from moving locked axes |
+| `components/editPicking.ts` | pixel -> vertex/edge/face resolution and box selection |
 
 ## Tests
 
 ```bash
 npm run test:geometry   # 24 tests on the mesh kernel
-npm run test:axis       # 8 tests on the axis constraint used by snapping
+npm run test:axis       # 10 tests on the axis constraint used by snapping
+npm run test:picking    # 15 tests on click -> element picking, with real three.js cameras
 npm run test:store      # 15 tests driving the real store through the modelling workflows
 ```
+
+`npm test` runs all four (64 assertions groups). The picking suite builds real
+perspective and orthographic cameras in Node — no WebGL — and covers the cases that are easy
+to get wrong by eye: elements that overlap on screen resolve to the one closest to the camera,
+so a cube seen from a corner gives you the visible corner and not the hidden one behind it.
 
 They compile the real `editGeometry.ts` / `store.ts` with `tsc` into `.tmp-test/` and run them
 in Node, so the assertions exercise the shipped code paths (conversion, extrude, snap-weld,
