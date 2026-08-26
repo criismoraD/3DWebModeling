@@ -52,6 +52,31 @@ export function isConstrained(mask: AxisMask): boolean {
   return !(mask.x && mask.y && mask.z);
 }
 
+/**
+ * Applies a move to a point while guaranteeing the locked axes keep their exact
+ * original value, even if `delta` or `snapShift` carry components for them.
+ * This is the last line of defence before positions are written to the mesh.
+ */
+export function moveWithConstraint(
+  original: XYZ,
+  delta: XYZ,
+  snapShift: XYZ | null,
+  mask: AxisMask
+): XYZ {
+  const shift = snapShift ?? { x: 0, y: 0, z: 0 };
+  const moved = {
+    x: original.x + delta.x + shift.x,
+    y: original.y + delta.y + shift.y,
+    z: original.z + delta.z + shift.z,
+  };
+  if (!mask) return moved;
+  return {
+    x: mask.x ? moved.x : original.x,
+    y: mask.y ? moved.y : original.y,
+    z: mask.z ? moved.z : original.z,
+  };
+}
+
 /** Human readable label of a constraint, for the status bar. */
 export function maskLabel(mask: AxisMask): string {
   if (!mask) return 'FREE';

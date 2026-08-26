@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { useAppStore } from '../store';
 import type { AxisLock, ModalTransform, SceneObject, SnapTarget, Vector3Data } from '../types';
 import { getRenderData } from './EditableMesh';
-import { applyMask, isConstrained, maskFromGizmoAxis, maskFromLock } from './axisConstraint';
+import { applyMask, isConstrained, maskFromGizmoAxis, maskFromLock, moveWithConstraint } from './axisConstraint';
 import { elementsInRect as elementsInRectPure, pickElement } from './editPicking';
 import type { AxisMask } from './axisConstraint';
 import { activeVertexIndices, selectionCenter } from '../editGeometry';
@@ -640,10 +640,17 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       snapped = !!snap.target;
       setSnapTarget(snap.target);
       if (snap.target) {
-        delta = delta.add(snap.shift); // already masked: locked axes keep their value
+        delta = delta.add(snap.shift);
         amount = delta.length();
-        project(delta);
       }
+
+      // write through the constraint so a locked axis cannot drift, snapped or not
+      const mask = maskFromLock(axisLock);
+      state.originals.forEach((localPos, i) => {
+        const worldOrig = localPos.clone().applyMatrix4(matrices.world);
+        const final = moveWithConstraint(worldOrig, delta, null, mask);
+        movedWorld.set(i, new THREE.Vector3(final.x, final.y, final.z));
+      });
     } else if (modalTransform.type === 'rotate') {
       const viewAxis = new THREE.Vector3();
       camera.getWorldDirection(viewAxis);
