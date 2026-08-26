@@ -35,7 +35,15 @@ const AXIS_VECTORS: Record<Exclude<AxisLock, 'free'>, THREE.Vector3> = {
  * constant pixel size in every viewport (perspective and ortho) and always
  * faces the camera, so it reads as a UI icon rather than as geometry.
  */
-const GrabHandle: React.FC<{ position: THREE.Vector3; color?: string }> = ({ position, color = '#ffd400' }) => {
+/**
+ * `radiusPx` is the picking radius, so the ring is drawn to match the area that
+ * actually grabs the vertex: the whole visible handle must be clickable.
+ */
+const GrabHandle: React.FC<{ position: THREE.Vector3; radiusPx: number; color?: string }> = ({
+  position,
+  radiusPx,
+  color = '#ffd400',
+}) => {
   const group = useRef<THREE.Group>(null);
 
   useFrame(({ camera, size }) => {
@@ -49,7 +57,7 @@ const GrabHandle: React.FC<{ position: THREE.Vector3; color?: string }> = ({ pos
     } else {
       worldPerPixel = 1 / Math.max(1e-6, (camera as THREE.OrthographicCamera).zoom);
     }
-    const px = worldPerPixel * 17;
+    const px = worldPerPixel * Math.max(6, radiusPx);
     g.scale.set(px, px, px);
     g.quaternion.copy(camera.quaternion);
   });
@@ -825,7 +833,7 @@ export const EditModeController: React.FC<{ viewportId: number }> = ({ viewportI
       />
 
       {hoverElement && hoverElement.kind === 'vertex' && !modalTransform && !drag.current && (
-        <GrabHandle position={toVec3(hoverElement.point)} />
+        <GrabHandle position={toVec3(hoverElement.point)} radiusPx={snapSettings.radiusPx} />
       )}
 
       {sourceWorld && (
