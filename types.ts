@@ -129,7 +129,8 @@ export type EditOperation =
   | { type: 'triangulate' }
   | { type: 'inset'; amount: number }
   | { type: 'mirror'; axis: 'x' | 'y' | 'z' }
-  | { type: 'loop-cut'; edge: string; t?: number };
+  | { type: 'loop-cut'; edge: string; t?: number }
+  | { type: 'recalculate-normals' };
 
 export interface EditOperationResult {
   mesh: MeshData;

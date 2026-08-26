@@ -538,7 +538,8 @@ const EditToolbar: React.FC = () => {
       {btn('Inset faces (I)', () => runEditOp({ type: 'inset', amount: 0.2 }), <Square size={14} />, editSelection.faces.length === 0)}
       <MirrorDropdown />
       {btn('Triangulate (Ctrl+T)', () => runEditOp({ type: 'triangulate' }), <Triangle size={14} />, editSelection.faces.length === 0)}
-      {btn('Flip Normals (Shift+N)', () => runEditOp({ type: 'flip-normals' }), <FlipHorizontal2 size={14} />, editSelection.faces.length === 0)}
+      {btn('Recalculate Normals Outside (Shift+N)', () => runEditOp({ type: 'recalculate-normals' }), <FlipHorizontal2 size={14} />)}
+      {btn('Flip Normals (Alt+N)', () => runEditOp({ type: 'flip-normals' }), <FlipHorizontal2 size={14} />, editSelection.faces.length === 0)}
       <MergeDropdown />
       <div className="w-px h-4 bg-gray-700 mx-1"></div>
       {btn('Delete (X)', () => runEditOp({ type: 'delete' }), <Trash2 size={14} />, activeVertexCount(editSelection) === 0)}
@@ -1048,6 +1049,7 @@ export default function App() {
         if (isCtrl && key === 'm') { e.preventDefault(); st.runEditOp({ type: 'mirror', axis: 'x' }); return; }
         if (e.altKey && key === 'a') { e.preventDefault(); st.clearEditSelection(); return; }
         if (e.altKey && key === 'm') { e.preventDefault(); st.runEditOp({ type: 'merge', mode: 'center' }); return; }
+        if (e.altKey && key === 'n') { e.preventDefault(); st.runEditOp({ type: 'flip-normals' }); return; }
 
         switch (key) {
           case '1': st.setSubObjectMode('vertex'); break;
@@ -1075,7 +1077,7 @@ export default function App() {
           case 'p': e.preventDefault(); st.separateSelected(); break;
           case '[': st.shrinkEditSelection(); break;
           case ']': st.growEditSelection(); break;
-          case 'n': if (e.shiftKey) st.runEditOp({ type: 'flip-normals' }); break;
+          case 'n': if (e.shiftKey) { e.preventDefault(); st.runEditOp({ type: 'recalculate-normals' }); } break;
           case 'escape': e.preventDefault(); st.clearEditSelection(); break;
         }
         if (e.key === 'Shift' && key === 'n') st.runEditOp({ type: 'flip-normals' });

@@ -572,6 +572,70 @@ test('applyEditOperation routes loop-cut', () => {
   assert.equal(res.mesh.faces.length, 10);
 });
 
+/* --------------------------- recalculate normals --------------------------- */
+
+test('recalculateNormalsOutside fixes a cube with every face flipped', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const insideOut = G.cloneMesh(m);
+  insideOut.faces = insideOut.faces.map(f => f.slice().reverse());
+
+  // sanity: all normals point inwards before
+  insideOut.faces.forEach(f => {
+    const n = G.polygonNormal(insideOut, f);
+    const c = G.polygonCenter(insideOut, f);
+    assert.ok(G.dotV(n, c) < 0, 'test premise: the normals should start pointing inwards');
+  });
+
+  const res = G.recalculateNormalsOutside(insideOut);
+  assert.ok(res.changed);
+  res.mesh.faces.forEach((f, fi) => {
+    const n = G.polygonNormal(res.mesh, f);
+    const c = G.polygonCenter(res.mesh, f);
+    assert.ok(G.dotV(n, c) > 0, `face ${fi} still points inwards`);
+  });
+});
+
+test('recalculateNormalsOutside leaves a correct mesh untouched', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const res = G.recalculateNormalsOutside(m);
+  assert.equal(res.changed, false, 'nothing needed flipping');
+  assert.deepEqual(res.mesh.faces, m.faces);
+});
+
+test('recalculateNormalsOutside handles each shell of a two-solid mesh', () => {
+  const a = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const b = G.transformMesh(G.boxToMesh({ x: 1, y: 1, z: 1 }), {
+    position: { x: 5, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+  });
+  const joined = G.joinMeshes([a, b]);
+  // flip only the second solid
+  for (let i = a.faces.length; i < joined.faces.length; i++) joined.faces[i] = joined.faces[i].reverse();
+
+  const res = G.recalculateNormalsOutside(joined);
+  assert.ok(res.changed);
+
+  const boundsA = { x: 0 };
+  res.mesh.faces.forEach((f, fi) => {
+    const n = G.polygonNormal(res.mesh, f);
+    const c = G.polygonCenter(res.mesh, f);
+    // each solid is centred on its own middle, so compare against the nearest centre
+    const centre = { x: c.x > 2.5 ? 5 : 0, y: 0, z: 0 };
+    const outward = { x: c.x - centre.x, y: c.y - centre.y, z: c.z - centre.z };
+    assert.ok(G.dotV(n, outward) > 0, `face ${fi} of shell ${centre.x} points inwards`);
+    void boundsA; void fi;
+  });
+});
+
+test('applyEditOperation routes recalculate-normals', () => {
+  const m = G.boxToMesh({ x: 1, y: 1, z: 1 });
+  const insideOut = G.cloneMesh(m);
+  insideOut.faces = insideOut.faces.map(f => f.slice().reverse());
+  const res = G.applyEditOperation(insideOut, { vertices: [], edges: [], faces: [] }, 'face', {
+    type: 'recalculate-normals',
+  });
+  assert.ok(res.changed);
+});
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length > 0) {
   failures.forEach(({ name, err }) => {

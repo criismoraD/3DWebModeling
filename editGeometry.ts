@@ -1174,6 +1174,80 @@ export function mirrorMesh(mesh: MeshData, axis: MirrorAxis, mergeThreshold = 1e
   };
 }
 
+/* ------------------------------ normals ------------------------------ */
+
+/** Signed volume of a triangle soup; the sign tells which way the faces point. */
+function signedVolume(mesh: MeshData, faces: number[][]): number {
+  let total = 0;
+  faces.forEach(face => {
+    const pts = face.map(i => mesh.vertices[i]);
+    if (pts.length < 3 || pts.some(p => !p)) return;
+    triangulatePolygon(pts).forEach(([a, b, c]) => {
+      total += dotV(pts[a], crossV(pts[b], pts[c])) / 6;
+    });
+  });
+  return total;
+}
+
+/** Groups faces into connected shells (faces sharing an edge). */
+function faceShells(mesh: MeshData): number[][] {
+  const edgeMap = buildEdgeFaceMap(mesh);
+  const shellOf = new Array(mesh.faces.length).fill(-1);
+  let shells = 0;
+
+  mesh.faces.forEach((_, start) => {
+    if (shellOf[start] >= 0) return;
+    const shell: number[] = [];
+    const queue = [start];
+    shellOf[start] = shells;
+    while (queue.length > 0) {
+      const fi = queue.pop()!;
+      shell.push(fi);
+      faceEdges(mesh.faces[fi]).forEach(([a, b]) => {
+        (edgeMap.get(edgeKey(a, b)) || []).forEach(other => {
+          if (shellOf[other] < 0) {
+            shellOf[other] = shells;
+            queue.push(other);
+          }
+        });
+      });
+    }
+    shells++;
+  });
+
+  const out: number[][] = [];
+  for (let i = 0; i < shells; i++) out.push([]);
+  shellOf.forEach((shell, fi) => out[shell].push(fi));
+  return out;
+}
+
+/**
+ * Recalculates the winding of every shell so its normals point outwards
+ * (Blender "Shift+N"). Each connected shell is judged on its own signed volume,
+ * so a mesh made of several solids is handled correctly.
+ */
+export function recalculateNormalsOutside(mesh: MeshData): EditOperationResult {
+  const out = cloneMesh(mesh);
+  let flipped = 0;
+
+  faceShells(mesh).forEach(shell => {
+    const faces = shell.map(fi => mesh.faces[fi]);
+    if (signedVolume(mesh, faces) < 0) {
+      shell.forEach(fi => {
+        out.faces[fi] = out.faces[fi].slice().reverse();
+      });
+      flipped++;
+    }
+  });
+
+  const allFaces = out.faces.map((_, i) => i);
+  return {
+    mesh: out,
+    selection: { vertices: [], edges: [], faces: allFaces },
+    changed: flipped > 0,
+  };
+}
+
 /* ------------------------------ loop cut ------------------------------ */
 
 /**
@@ -1648,6 +1722,8 @@ export function applyEditOperation(
       return mirrorMesh(mesh, op.axis);
     case 'loop-cut':
       return loopCut(mesh, op.edge, op.t ?? 0.5);
+    case 'recalculate-normals':
+      return recalculateNormalsOutside(mesh);
     default:
       return { mesh, selection: sel, changed: false };
   }
